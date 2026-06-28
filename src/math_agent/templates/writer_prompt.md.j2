@@ -1,0 +1,128 @@
+# 数学建模国赛论文撰写任务
+
+## ⚠️ IRON RULES（违反任一条即视为失败）
+
+1. **禁编造数据**：所有数字必须可在下文「代码运行结果」或「敏感性结果」中追溯。无来源的数字一律改为定性表述。
+2. **禁占位**：不得出现「待补」「略」「TODO」「(数据)」「(略)」之类的占位符。
+3. **每段必有论点**：禁止"罗列定义但不论证"，禁止"复述题目"。
+
+---
+
+## 题目
+{{ problem }}
+
+## 已确认假设（{{ assumptions | length }} 条）
+{% for a in assumptions %}
+{{ loop.index }}. **{{ a.statement }}**
+   - 依据：{{ a.rationale or "（未填写依据）" }}
+{% endfor %}
+
+## 模型演化
+{% for m in model_versions %}
+### {{ loop.index }}. [{{ m.stage }}] {{ m.description[:80] }}
+{{ m.description }}
+
+**方程**：
+{% for eq in m.equations %}
+- $$ {{ eq }} $$
+{% endfor %}
+
+**变量**：
+{% for k, v in m.variables.items() %}
+- `{{ k }}`：{{ v }}
+{% endfor %}
+
+{% if m.notes %}**与上版差异**：{{ m.notes }}{% endif %}
+{% endfor %}
+
+## 代码运行结果（按 artifact 分组，每段保留末尾 500 字符以保住最终数字）
+{% for a in code_artifacts %}
+### [{{ loop.index }}] {{ a.purpose }} — success={{ a.success }}
+```
+{{ a.stdout[-500:] }}
+```
+{% if a.stderr and not a.success %}**stderr**：`{{ a.stderr[-300:] }}`{% endif %}
+{% endfor %}
+
+## 敏感性分析结果
+{% if sensitivity_runs %}
+{% for r in sensitivity_runs %}
+- **参数 `{{ r.parameter }}`**：在取值 {{ r.values }} 下，指标 `{{ r.metric }}` = {{ r.results }}
+  - 解读：{{ r.interpretation or "（未提供解读）" }}
+{% endfor %}
+{% else %}
+（暂无敏感性结果——sensitivity 章节应说明「未执行敏感性分析」）
+{% endif %}
+
+## 图表（已生成）
+{% if figures %}
+{% for f in figures %}
+- **图 {{ loop.index }}（{{ f.purpose }}）**：{{ f.caption or "（无 caption）" }}
+  - 分析：{{ f.analysis or "（无分析）" }}
+{% endfor %}
+{% else %}
+（暂无图表）
+{% endif %}
+
+---
+
+## 各章节字数预算与结构要求
+
+| 章节 | 字数区间 | 强制结构 |
+|---|---|---|
+| `abstract` | 250–400 | 4 个要素：问题—方法—**关键数字结果**—创新点；至少出现 1 个具体数字 |
+| `problem_restatement` | 300–500 | 明示「决策变量 / 目标 / 约束」三要素 |
+| `assumptions` | ≥5 条编号，每条 ≥2 句 | 每条形如「**假设**：陈述；**依据**：……」 |
+| `notation` | Markdown 表格 | `\| 符号 \| 含义 \| 单位 \|`，覆盖前述所有 `m.variables` |
+| `model_section` | 800–1500 | 按 basic→improved→final 三小节；每小节首句 = "相对上版引入了 X" |
+| `solution` | 400–800 | 采用 CER：Claim（结论数字）→ Evidence（"见附录 A.N"）→ Reasoning |
+| `sensitivity` | 300–600 | **参数敏感度排序** + 引「如图 B.Y 所示」；至少 1 条结论性断言 |
+| `conclusion` | 300–500 | 三段式：优点 / 缺点 / 推广方向 |
+| `references` | ≥3 条 | `[n] 作者. 标题. 出处, 年.` 格式 |
+
+## 中文学术写作守则（违反将影响"写作清晰"评分）
+
+**禁用词替换表**（出现请改写）：
+- 深入探讨 / 深入研究 → 研究 / 分析 / 考察
+- 至关重要 / 举足轻重 → 关键 / 重要
+- 不难看出 / 显而易见 / 众所周知 → 删除整句开头，直接陈述事实
+- 在某种意义上 / 在某种程度上 → 删除或具体化
+- 为...提供了新的思路 → 用具体改进点替代
+
+**段首禁忌**：禁用「众所周知」「显而易见」「综上所述」开头（结论段允许一次「综上」）
+
+**标点节律**：
+- 破折号 `——` 全文 ≤2 次
+- 分号 `；` ≤2 个/千字（优先用句号）
+- 禁止连续 ≥3 段都以"冒号+列表"开头
+
+**段落多样性**：禁止 ≥5 段连续相同句数；用 2–8 句变化的段长承载不同功能（短段=强调，长段=论证）
+
+---
+
+## 输出契约
+
+请返回严格符合下列 schema 的 JSON（**不得包含其他键**）：
+
+```json
+{
+  "abstract": str,
+  "problem_restatement": str,
+  "assumptions": str,
+  "notation": str,
+  "model_section": str,
+  "solution": str,
+  "sensitivity": str,
+  "conclusion": str,
+  "references": str
+}
+```
+
+生成前，请在思考中先完成 5 维自检（不输出）：
+- 假设合理性：每条假设是否在 `assumptions` 章节被显式承接？
+- 模型创新：`model_section` 是否突出了相对经典做法的改进点？
+- 结果正确：`solution` / `sensitivity` 中的数字是否能在「代码运行结果」中追溯？
+- 写作清晰：是否触发了上文「禁用词」「段首禁忌」？
+- 综合深度：`sensitivity` 与 `conclusion` 是否给出了实质洞察而非套话？
+
+若某一维不达标，请在生成对应章节时返工，**不要**在 JSON 里夹带自检结果。

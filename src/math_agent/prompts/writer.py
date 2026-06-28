@@ -1,27 +1,38 @@
-"""Writer：把 state 内的素材组装成论文各章节文本（Markdown）。"""
+"""Writer prompt：模板化版本。
+
+设计原则：
+- 模板与 paper.md.j2 共用 templates/ 目录与同一 Jinja2 Environment
+- Python 侧只负责构建 view dict；规约/字数预算/禁用词等全部写在模板里
+- 输出契约与 PaperSections schema 严格一致
+"""
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from math_agent.state import MathModelingState
 
 SYSTEM = (
-    "你是负责撰写国赛论文的主笔。请把给定素材组织成正式论文章节。"
-    "禁止编造数据；引用代码结果时使用'根据计算（见附录代码 X）'句式。"
+    "你是国赛 O 奖论文主笔。严格遵守用户消息中的 IRON RULES 与字数预算。"
+    "禁止编造数据；禁止占位符；每段必须有可被证伪的论点。"
+    "输出严格的 JSON，键名与给定 schema 完全一致，不得增减键。"
 )
 
-def build_prompt(state):
-    asum = "\n".join(f"- {a.statement}" for a in state.assumptions)
-    models = "\n\n".join(
-        f"### {m.stage}\n{m.description}\n方程：" + "; ".join(m.equations)
-        for m in state.model_versions
-    )
-    code_stdout = "\n".join(a.stdout for a in state.code_artifacts if a.success)[:2000]
-    sens = "\n".join(
-        f"- {r.parameter}: {r.metric} 随取值 {r.values} → {r.results}；{r.interpretation}"
-        for r in state.sensitivity_runs
-    ) or "（暂无敏感性结果）"
-    return (
-        f"# 题目\n{state.problem}\n\n# 假设\n{asum}\n\n"
-        f"# 模型演化\n{models}\n\n# 代码运行关键输出（截断）\n{code_stdout}\n\n"
-        f"# 敏感性结果\n{sens}\n\n"
-        f"请输出 JSON：{{\"abstract\":str,\"problem_restatement\":str,\"assumptions\":str,"
-        f"\"notation\":str,\"model_section\":str,\"solution\":str,\"sensitivity\":str,"
-        f"\"conclusion\":str,\"references\":str}}。每段不少于 150 字。"
-        f"（sensitivity 段：综述 state.sensitivity_runs 的关键发现；若无 runs 则写'未执行敏感性分析'。）"
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+_env = Environment(
+    loader=FileSystemLoader(_TEMPLATE_DIR),
+    autoescape=select_autoescape([]),
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
+
+
+def build_prompt(state: MathModelingState) -> str:
+    tmpl = _env.get_template("writer_prompt.md.j2")
+    return tmpl.render(
+        problem=state.problem,
+        assumptions=state.assumptions,
+        model_versions=state.model_versions,
+        code_artifacts=state.code_artifacts,
+        sensitivity_runs=state.sensitivity_runs,
+        figures=state.figures,
     )
