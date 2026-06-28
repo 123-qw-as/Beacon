@@ -13,11 +13,7 @@ def modeler_node(state: MathModelingState) -> dict:
     # 没有同阶段的上一版时，把上一阶段的最终版作为参考（用于 improved 起步）
     prev_for_stage = same_stage_prev or (state.model_versions[-1] if state.model_versions else None)
 
-    critic_fb = next(
-        (r for r in reversed(state.critic_reports)
-         if r.target == "modeler" and r.stage == state.stage_target),
-        None,
-    )
+    critic_fb = state.latest_critic_for_stage("modeler", state.stage_target)
     # 当前阶段已 approved，不再回灌反馈
     if critic_fb and critic_fb.approved:
         critic_fb = None

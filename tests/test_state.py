@@ -6,7 +6,6 @@ from math_agent.state import (
     PaperSections,
     SensitivityRun,
     FigureArtifact,
-    EvaluationReport,
 )
 
 
@@ -47,12 +46,9 @@ def test_latest_critic_for_stage_filters_by_stage():
     s.critic_reports.append(CriticReport(target="modeler", score=9, approved=True, stage="basic"))
     s.critic_reports.append(CriticReport(target="modeler", score=5, stage="improved"))
     # basic 阶段的最新 critic 是 score=9 那条，不是 improved 的 5 分
-    basic = next((r for r in reversed(s.critic_reports) if r.target == "modeler" and r.stage == "basic"), None)
-    improved = next((r for r in reversed(s.critic_reports) if r.target == "modeler" and r.stage == "improved"), None)
-    final = next((r for r in reversed(s.critic_reports) if r.target == "modeler" and r.stage == "final"), None)
-    assert basic.score == 9
-    assert improved.score == 5
-    assert final is None
+    assert s.latest_critic_for_stage("modeler", "basic").score == 9
+    assert s.latest_critic_for_stage("modeler", "improved").score == 5
+    assert s.latest_critic_for_stage("modeler", "final") is None
 
 
 def test_paper_sections_defaults_empty():
