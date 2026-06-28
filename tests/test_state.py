@@ -4,6 +4,9 @@ from math_agent.state import (
     ModelVersion,
     CriticReport,
     PaperSections,
+    SensitivityRun,
+    FigureArtifact,
+    EvaluationReport,
 )
 
 
@@ -56,5 +59,38 @@ def test_paper_sections_defaults_empty():
     p = PaperSections()
     assert p.abstract == ""
     assert p.conclusion == ""
-    # sensitivity 字段在 MVP 已移除，避免 Plan B 引入后字段名漂移
-    assert not hasattr(p, "sensitivity")
+    # Plan B 引入 sensitivity 章节
+    assert p.sensitivity == ""
+
+
+def test_state_has_sensitivity_runs():
+    s = MathModelingState(problem="p")
+    s.sensitivity_runs.append(
+        SensitivityRun(
+            parameter="lambda", values=[0.5, 1.0, 1.5],
+            metric="avg_wait", results=[2.1, 3.5, 8.0],
+            interpretation="敏感度高",
+        )
+    )
+    assert s.sensitivity_runs[-1].parameter == "lambda"
+
+
+def test_state_has_figures():
+    s = MathModelingState(problem="p")
+    s.figures.append(
+        FigureArtifact(
+            path="runs/x/fig1.png", purpose="对比", caption="见正文",
+            quality_score=8, analysis="单调上升",
+        )
+    )
+    assert s.figures[-1].quality_score == 8
+
+
+def test_state_has_evaluation_default_none():
+    s = MathModelingState(problem="p")
+    assert s.evaluation is None
+
+
+def test_state_has_human_decision_default_none():
+    s = MathModelingState(problem="p")
+    assert s.human_decision is None

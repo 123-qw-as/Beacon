@@ -14,6 +14,9 @@ MODEL_ROUTING = {
     "model_critic": STRONG_MODEL,
     "coder": DEFAULT_MODEL,
     "writer": STRONG_MODEL,
+    "figure_critic": STRONG_MODEL,   # 多模态
+    "paper_critic": STRONG_MODEL,
+    "evaluation": STRONG_MODEL,
 }
 
 # 循环 / 重试上限

@@ -27,7 +27,11 @@ class RunResult:
 
 def _minimal_env() -> dict[str, str]:
     """只透传子进程跑 Python 必需的变量。"""
-    keys = ["PATH", "PYTHONPATH", "PYTHONHOME", "SystemRoot", "TEMP", "TMP", "LANG", "LC_ALL"]
+    keys = [
+        "PATH", "PYTHONPATH", "PYTHONHOME", "SystemRoot", "TEMP", "TMP", "LANG", "LC_ALL",
+        # matplotlib 等库要求能解析 Path.home()
+        "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME",
+    ]
     return {k: os.environ[k] for k in keys if k in os.environ}
 
 

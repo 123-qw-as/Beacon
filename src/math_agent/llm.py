@@ -27,6 +27,7 @@ def complete(
     schema: Type[T] | None = None,
     model: str | None = None,
     system: str | None = None,
+    images: list[str] | None = None,
     temperature: float = 0.3,
     max_retries: int = MAX_LLM_RETRIES,
     **kwargs: Any,
@@ -35,6 +36,7 @@ def complete(
 
     - schema 为 None 时返回纯文本；
     - schema 为 Pydantic 模型时强制 JSON 输出，解析失败会自动重试，并把"上次输出 + 错误"喂回模型让它修正。
+    - images 为图片 data URL（`data:image/png;base64,...`）列表时走多模态格式。
 
     错误状态分两类，互不污染：
     - 网络/服务异常 (litellm.completion 抛错)：换一次，不构造反馈消息。
@@ -44,7 +46,16 @@ def complete(
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    if images:
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                *[{"type": "image_url", "image_url": {"url": u}} for u in images],
+            ],
+        })
+    else:
+        messages.append({"role": "user", "content": prompt})
 
     response_format = None
     if schema is not None:

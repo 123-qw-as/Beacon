@@ -45,3 +45,24 @@ def test_complete_raises_after_all_retries_exhausted(mocker):
     mocker.patch("litellm.completion", return_value=bad)
     with pytest.raises(llm.LLMError):
         llm.complete("x", schema=_Answer, max_retries=1)
+
+
+def test_complete_with_images_packs_multimodal_content(mocker):
+    captured = {}
+
+    def _fake(model, messages, **kw):
+        captured["messages"] = messages
+        m = mocker.MagicMock()
+        m.choices = [mocker.MagicMock(message=mocker.MagicMock(content="ok"))]
+        return m
+
+    mocker.patch("litellm.completion", side_effect=_fake)
+    out = llm.complete(
+        "describe this", model="gpt-4o-mini",
+        images=["data:image/png;base64,AAA="],
+    )
+    assert out == "ok"
+    user_msg = captured["messages"][-1]
+    assert isinstance(user_msg["content"], list)
+    kinds = {p["type"] for p in user_msg["content"]}
+    assert kinds == {"text", "image_url"}

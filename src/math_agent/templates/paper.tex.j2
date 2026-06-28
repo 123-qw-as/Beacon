@@ -1,0 +1,62 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage{xeCJK}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\setCJKmainfont{SimSun}  % 系统无 SimSun 时由编译失败回退到 Markdown
+\title{ {{- problem | e -}} }
+\author{Math Agent}
+\date{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+{{ paper.abstract }}
+\end{abstract}
+
+\section{问题重述}
+{{ paper.problem_restatement }}
+
+\section{模型假设}
+{{ paper.assumptions }}
+
+\section{符号说明}
+{{ paper.notation }}
+
+\section{模型的建立与演化}
+{{ paper.model_section }}
+
+\section{模型的求解}
+{{ paper.solution }}
+
+{% if figures %}
+\subsection{关键图表}
+{% for fig in figures %}
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.75\linewidth]{ {{- fig.path -}} }
+\caption{ {{- fig.caption | default(fig.purpose) -}} }
+\end{figure}
+
+{{ fig.analysis }}
+
+{% endfor %}
+{% endif %}
+
+\section{敏感性分析}
+{{ paper.sensitivity }}
+
+{% for r in sensitivity_runs %}
+\paragraph{ {{- r.parameter -}} }
+{{ r.interpretation }}
+
+{% endfor %}
+
+\section{模型评价与结论}
+{{ paper.conclusion }}
+
+\section*{参考文献}
+{{ paper.references }}
+
+\end{document}

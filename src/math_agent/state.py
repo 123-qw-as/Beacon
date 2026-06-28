@@ -20,6 +20,7 @@ ModelStage = Literal["basic", "improved", "final"]
 class Assumption(BaseModel):
     statement: str
     rationale: str = ""
+    sensitivity_relevant: bool = False  # Plan B: sensitivity 节点消费该字段
 
 
 class ModelVersion(BaseModel):
@@ -49,6 +50,41 @@ class CriticReport(BaseModel):
     stage: Optional[ModelStage] = None
 
 
+class SensitivityRun(BaseModel):
+    parameter: str
+    values: list[float]
+    metric: str
+    results: list[float]
+    interpretation: str = ""
+    figure_path: str | None = None
+
+
+class FigureArtifact(BaseModel):
+    path: str
+    purpose: str
+    caption: str = ""
+    quality_score: int = 0           # 0-10，FigureCritic 打分
+    quality_issues: list[str] = Field(default_factory=list)
+    analysis: str = ""               # FigureAnalyst 产出的段落
+
+
+class EvaluationReport(BaseModel):
+    """对齐国赛四大标准 + 国一加分项。每项 0-10。"""
+    assumption_reasonableness: int
+    modeling_creativity: int
+    result_correctness: int
+    writing_clarity: int
+    extra_depth: int                 # 加分项：敏感性/创新/分析深度
+    overall: float                   # 加权总评
+    issues: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class HumanDecision(BaseModel):
+    approved: bool
+    notes: str = ""
+
+
 class PaperSections(BaseModel):
     abstract: str = ""
     problem_restatement: str = ""
@@ -56,7 +92,7 @@ class PaperSections(BaseModel):
     notation: str = ""
     model_section: str = ""
     solution: str = ""
-    # sensitivity 章节延后到 Plan B 引入 Sensitivity 节点时再加回 schema 与模板
+    sensitivity: str = ""            # Plan B 引入
     conclusion: str = ""
     references: str = ""
 
@@ -72,13 +108,20 @@ class MathModelingState(BaseModel):
     model_versions: Annotated[list[ModelVersion], add] = Field(default_factory=list)
     code_artifacts: Annotated[list[CodeArtifact], add] = Field(default_factory=list)
     critic_reports: Annotated[list[CriticReport], add] = Field(default_factory=list)
+    sensitivity_runs: Annotated[list[SensitivityRun], add] = Field(default_factory=list)
+    figures: Annotated[list[FigureArtifact], add] = Field(default_factory=list)
 
     # 论文（覆盖语义）
     paper: PaperSections = Field(default_factory=PaperSections)
 
+    # 评估（覆盖语义）
+    evaluation: EvaluationReport | None = None
+    human_decision: HumanDecision | None = None
+
     # 流程控制（覆盖语义）
     iteration: int = 0
     stage_target: ModelStage = "basic"  # 当前要产出的阶段
+    errors: Annotated[list[str], add] = Field(default_factory=list)
 
     # 输出
     output_dir: Optional[str] = None
@@ -90,5 +133,12 @@ class MathModelingState(BaseModel):
     def latest_critic(self, target: str) -> CriticReport | None:
         for r in reversed(self.critic_reports):
             if r.target == target:
+                return r
+        return None
+
+    def latest_critic_for_stage(self, target: str, stage: ModelStage) -> CriticReport | None:
+        """按 (target, stage) 过滤，避免上一阶段未通过的反馈污染下一阶段。"""
+        for r in reversed(self.critic_reports):
+            if r.target == target and r.stage == stage:
                 return r
         return None
