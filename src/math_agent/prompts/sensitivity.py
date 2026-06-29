@@ -27,7 +27,10 @@ CODE_SYSTEM = (
     "你是建模队工程师。根据敏感性分析计划，写一段独立可运行的 Python，"
     "对每个 run 计算 metric 随 parameter 变化的曲线，并保存 PNG 到当前目录。"
     "约束：只用 numpy/scipy/matplotlib；为每个 run 单独保存一张 *.png；"
-    "用 print 输出 `RESULT: parameter=... values=... results=...` 行（每个 run 一行），方便解析。"
+    "中文字体设置：开头加 `matplotlib.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']; matplotlib.rcParams['axes.unicode_minus']=False`；"
+    "用 print 输出 `RESULT: parameter=<名称字面量> values=<list> results=<list>` 行（每个 run 一行），"
+    "**parameter 必须是字符串字面量（如 `parameter=alpha`），不要写 `parameter={alpha}` 这种把变量值代入的写法**，"
+    "values/results 用 Python 列表的 repr（例如 `[0.1, 0.2, 0.3]`），方便正则解析。"
 )
 
 
