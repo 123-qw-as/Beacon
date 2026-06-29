@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from math_agent.tools.runner import run_python, RunResult
 
 
@@ -35,3 +37,17 @@ def test_runner_strips_host_env(workdir, monkeypatch):
     )
     assert res.success
     assert "MISSING" in res.stdout
+
+
+def test_runner_accepts_relative_workdir(tmp_path, monkeypatch):
+    """回归：workdir 传相对路径时不应触发 cwd+script 双重前缀。
+
+    历史 bug：subprocess 切换 cwd 后，python 解释器把 argv 里的相对 script
+    解释为相对于新 cwd，导致 "attempt_0/runs/.../attempt_0/_run.py"
+    （所有平台都有此行为，不是 Windows 特有）。
+    """
+    monkeypatch.chdir(tmp_path)
+    rel = Path("runs/x/attempt_0")
+    res = run_python("print('relpath_ok')", workdir=rel)
+    assert res.success, f"stderr={res.stderr!r}"
+    assert "relpath_ok" in res.stdout

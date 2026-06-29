@@ -36,7 +36,9 @@ def _minimal_env() -> dict[str, str]:
 
 
 def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
-    workdir = Path(workdir)
+    # 必须 resolve()：subprocess 切换 cwd 后，python 解释器把 argv 里的
+    # 相对 script 解释为相对于新 cwd，导致路径双重前缀。
+    workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     script = workdir / "_run.py"
     script.write_text(code, encoding="utf-8")
