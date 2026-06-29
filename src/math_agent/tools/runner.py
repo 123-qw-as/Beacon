@@ -61,7 +61,7 @@ def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
     new_files = sorted(after - before - {"_run.py"})
     return RunResult(
         success=proc.returncode == 0,
-        stdout=proc.stdout,
-        stderr=proc.stderr,
+        stdout=proc.stdout or "",
+        stderr=proc.stderr or "",
         artifact_paths=[str(workdir / n) for n in new_files],
     )
