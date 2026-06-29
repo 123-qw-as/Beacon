@@ -3,8 +3,10 @@
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{geometry}
+\usepackage{fontspec}              % xelatex 字体后备
 \geometry{margin=2.5cm}
-\setCJKmainfont{SimSun}  % 系统无 SimSun 时由编译失败回退到 Markdown
+\setCJKmainfont{SimSun}            % 系统无 SimSun 时编译失败回退到 Markdown
+\setmainfont{Times New Roman}      % 西文主字体，覆盖默认 lmroman 不含的字符
 \title{ {{- problem | e -}} }
 \author{Math Agent}
 \date{}
