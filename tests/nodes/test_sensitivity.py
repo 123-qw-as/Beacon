@@ -51,6 +51,19 @@ def test_sensitivity_falls_back_when_code_fails(mocker, workdir):
     assert delta.get("sensitivity_runs", []) == []
 
 
+def test_sensitivity_parse_handles_numpy_repr():
+    """RESULT 行里 np.float64(...) 形式的数字不应让节点崩（eval_v6_1 实测）。"""
+    from math_agent.nodes.sensitivity import _parse_results
+    line = ("RESULT: parameter=lambda values=[0.5, 1.0, 1.5] "
+            "results=[np.float64(2.1), np.float64(3.5), np.float64(8.0)]")
+    parsed = _parse_results(line)
+    assert len(parsed) == 1
+    param, vals, res = parsed[0]
+    assert param == "lambda"
+    assert vals == [0.5, 1.0, 1.5]
+    assert res == [2.1, 3.5, 8.0]
+
+
 def test_sensitivity_retries_after_failure_then_succeeds(mocker, workdir):
     plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [0.5, 1, 1.5, 2, 2.5],
                                   "metric": "y", "rationale": "x"}])
