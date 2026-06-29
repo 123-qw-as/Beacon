@@ -61,17 +61,34 @@ _UNICODE_MATH_MAP = {
 def _wrap_unicode_math(s: str) -> str:
     """把字符串中孤立的 unicode 数学字符替换为 `$\\cmd$`。
 
-    跳过已在 `$...$` 内的部分，避免双重包裹。**只处理 _UNICODE_MATH_MAP 中的字符**；
-    不识别 `s_i^0` 这种裸 LaTeX 下标——那是 writer prompt 的责任。
+    跳过已在 `$...$` 内的部分。如果 unicode 后面紧跟 `_xxx` 或 `^xxx`
+    （下标/上标 token），把整体作为一个 inline math 包起来——避免
+    `α_i` 被切成 `$\\alpha$_i` 导致 `_i` 又进 text mode 触发错误。
     """
     if not s:
         return s
-    # 按 $ 切分：偶数下标在 $...$ 外，奇数下标在内
     parts = s.split("$")
+    sub_re = re.compile(r"([_^](?:\{[^}]+\}|[A-Za-z0-9]+))+")
     for i in range(0, len(parts), 2):
-        for ch, cmd in _UNICODE_MATH_MAP.items():
-            if ch in parts[i]:
-                parts[i] = parts[i].replace(ch, f"${cmd}$")
+        out = []
+        j = 0
+        seg = parts[i]
+        while j < len(seg):
+            ch = seg[j]
+            cmd = _UNICODE_MATH_MAP.get(ch)
+            if cmd is None:
+                out.append(ch)
+                j += 1
+                continue
+            # 看后面是否紧跟下标/上标（re.match(pos) 仍从字符串绝对开头匹配 ^，所以去掉 ^ 并 anchor 在 pos）
+            m = sub_re.match(seg, j + 1)
+            if m and m.start() == j + 1:
+                out.append(f"${cmd}{m.group(0)}$")
+                j = m.end()
+            else:
+                out.append(f"${cmd}$")
+                j += 1
+        parts[i] = "".join(out)
     return "$".join(parts)
 
 
@@ -99,14 +116,73 @@ def _md_headings_to_latex(s: str) -> str:
     return _HEADING_RE.sub(_sub, s)
 
 
-def _prepare_section(s: str) -> str:
-    """paper 段渲染前预处理：markdown 标题 → section + unicode 数学 → inline math。
+_BACKTICK_RE = re.compile(r"`([^`\n]+?)`")
+# 裸 LaTeX 下标/上标：[字母][后续字母数字]*([_^](identifier|{...}))+
+# 例：D_i / c_{ij} / S_i^{(1)} / x_t^k；前面不接 \（命令名）或 $（已在 math 内）
+_NAKED_SUB_RE = re.compile(
+    r"(?<![\\$])"
+    r"([A-Za-z][A-Za-z0-9]*"
+    r"(?:[_^](?:\{[^}]+\}|[A-Za-z0-9]+))+)"
+)
 
-    顺序敏感：先转标题（再 wrap unicode 不会破坏 \\subsubsection*{}），
-    再 wrap unicode（最后才把 $ 引入文本）。**不调 _latex_escape**——writer
-    在 paper 段会故意写 LaTeX inline math 和 markdown 表格，escape 会破坏。
+
+def _md_inline_code_to_math(s: str) -> str:
+    """把 markdown 反引号 inline `code` 转成 `$code$`。
+
+    writer 在符号说明表里习惯写 `` `S_i` `` 这种 markdown 内联代码（v6.2 实测）。
+    LaTeX 不认反引号；转为 inline math 让 `S_i` 渲染为 S_i 的数学下标。
+    转换时把内容里的 unicode 数学字符也展开为 LaTeX 命令（α → \\alpha），
+    避免外层 _wrap_unicode_math 跳过 $...$ 内导致 α 仍裸用。
     """
-    return _wrap_unicode_math(_md_headings_to_latex(s))
+    if not s:
+        return s
+
+    def _sub(m: re.Match) -> str:
+        content = m.group(1)
+        for ch, cmd in _UNICODE_MATH_MAP.items():
+            if ch in content:
+                content = content.replace(ch, cmd)
+        return f"${content}$"
+
+    return _BACKTICK_RE.sub(_sub, s)
+
+
+def _wrap_naked_subscripts(s: str) -> str:
+    """把行内裸的 LaTeX 下标/上标自动包成 $...$。
+
+    覆盖 writer RULE 4 没治住的 `D_i`、`c_{ij}`、`S_i^{(1)}`。
+    跳过已在 $...$ 内、跳过 \\command 前缀（避免动 \\paragraph{w\\_RF}）。
+
+    已知 over-wrap 风险：`a_b_c` 这种合法变量名也会被当数学。但 paper 段里
+    几乎不会出现，且即便错伤，渲出来仍是合法 LaTeX（math italic 显示）。
+    """
+    if not s:
+        return s
+    parts = s.split("$")
+    for i in range(0, len(parts), 2):
+        parts[i] = _NAKED_SUB_RE.sub(r"$\1$", parts[i])
+    return "$".join(parts)
+
+
+def _prepare_section(s: str) -> str:
+    """paper 段渲染前预处理：4 步链式确定性转换，全部跳过已有 $...$。
+
+    顺序：
+    1. markdown 标题 `### xxx` → `\\subsubsection*{xxx}`
+    2. markdown 反引号 `` `S_i` `` → `$S_i$`（内容里的 unicode 同步展开）
+    3. 裸 LaTeX 下标 `D_i` → `$D_i$`（writer 漏的兜底）
+    4. unicode 数学符号 α → `$\\alpha$`（在 $...$ 之外的）
+
+    **不调 _latex_escape**——writer 在 paper 段会故意写 LaTeX inline math
+    和 markdown 表格，escape 会破坏。
+    """
+    return _wrap_unicode_math(
+        _wrap_naked_subscripts(
+            _md_inline_code_to_math(
+                _md_headings_to_latex(s)
+            )
+        )
+    )
 
 
 def latex_node(state: MathModelingState) -> dict:
