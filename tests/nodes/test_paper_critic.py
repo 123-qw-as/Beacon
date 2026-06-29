@@ -1,7 +1,9 @@
 from math_agent.state import (
     MathModelingState, PaperSections, FigureArtifact, SensitivityRun, CriticReport,
+    CodeArtifact,
 )
 from math_agent.nodes.paper_critic import paper_critic_node
+from math_agent.prompts.paper_critic import build_prompt
 
 
 def test_paper_critic_appends_report(mocker):
@@ -27,3 +29,48 @@ def test_paper_critic_handles_missing_paper(mocker):
     delta = paper_critic_node(s)
     assert delta["errors"]
     assert delta.get("critic_reports", []) == []
+
+
+def _paper_with_numbers():
+    return PaperSections(
+        abstract="目标成本52.6（放缩因子22.12，对应实际成本718）。",
+        problem_restatement="x"*200, assumptions="x"*200, notation="x"*200,
+        model_section="x"*200, solution="x"*200, sensitivity="x"*200,
+        conclusion="x"*200, references="-",
+    )
+
+
+def test_prompt_includes_code_stdout_block():
+    """build_prompt 第 4 个形参 code_stdout：注入 stdout 文本块。"""
+    real_stdout = "优化成功，目标总成本 = 52.7174\n扰动 +20% → 目标成本 53.7718"
+    prompt = build_prompt(_paper_with_numbers(), 0, 0, real_stdout)
+    assert "52.7174" in prompt
+    assert "53.7718" in prompt
+    assert "代码运行" in prompt or "stdout" in prompt.lower()
+
+
+def test_prompt_omits_stdout_block_when_empty():
+    """没有 success=True code_artifact 时不渲染 stdout 区块（避免噪声）。"""
+    prompt = build_prompt(_paper_with_numbers(), 0, 0, "")
+    assert "代码运行真实输出" not in prompt
+
+
+def test_paper_critic_node_passes_last_successful_stdout(mocker):
+    """节点：从 state.code_artifacts 取最后一个 success=True 的 stdout 传给 build_prompt。"""
+    captured = {}
+
+    def _capture(prompt, **kw):
+        captured["prompt"] = prompt
+        return CriticReport(target="paper", score=7, issues=[], suggestions=[], approved=False)
+
+    mocker.patch("math_agent.nodes.paper_critic.complete", side_effect=_capture)
+    s = MathModelingState(problem="p")
+    s.paper = _paper_with_numbers()
+    s.code_artifacts.append(CodeArtifact(purpose="x", code="...", success=False,
+                                          stdout="OLD_FAILED", stderr="error"))
+    s.code_artifacts.append(CodeArtifact(purpose="y", code="...", success=True,
+                                          stdout="NEW_TRUE_VALUE=52.7174", stderr=""))
+    delta = paper_critic_node(s)
+    assert delta["critic_reports"][0].target == "paper"
+    assert "NEW_TRUE_VALUE=52.7174" in captured["prompt"]
+    assert "OLD_FAILED" not in captured["prompt"]
