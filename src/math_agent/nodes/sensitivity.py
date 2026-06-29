@@ -84,7 +84,7 @@ def sensitivity_node(state: MathModelingState) -> dict:
         schema=SensitivityCode, system=CODE_SYSTEM,
         model=MODEL_ROUTING.get("coder"),
     )
-    sandbox_result = run_python(code_out.code, workdir=workdir)
+    sandbox_result = run_python(code_out.code, workdir=workdir, timeout=300)
     if not sandbox_result.success:
         return {"errors": [f"sensitivity: 扫参代码执行失败：{sandbox_result.stderr[:500]}"]}
 
