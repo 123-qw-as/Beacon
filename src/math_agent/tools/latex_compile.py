@@ -28,7 +28,9 @@ def compile_latex(tex_path: str | Path, *, timeout: int = 120) -> LatexResult:
                 ["xelatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
                 cwd=workdir, capture_output=True, text=True, timeout=timeout,
             )
-            log_acc.append(proc.stdout + "\n" + proc.stderr)
+            # subprocess.run may leave stdout/stderr as None when stream is closed early;
+            # coerce to '' to avoid TypeError in concat (same fix as tools/runner.py).
+            log_acc.append((proc.stdout or "") + "\n" + (proc.stderr or ""))
             if proc.returncode != 0:
                 return LatexResult(success=False, log="\n".join(log_acc))
         pdf = workdir / (tex_path.stem + ".pdf")
