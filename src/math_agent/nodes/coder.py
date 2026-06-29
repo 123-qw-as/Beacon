@@ -32,7 +32,7 @@ def coder_node(state: MathModelingState) -> dict:
             system=SYSTEM,
             model=MODEL_ROUTING["coder"],
         )
-        result = run_python(draft.code, workdir=workdir / f"attempt_{attempt}")
+        result = run_python(draft.code, workdir=workdir / f"attempt_{attempt}", timeout=300)
         artifacts.append(
             CodeArtifact(
                 purpose=draft.purpose,
@@ -47,4 +47,13 @@ def coder_node(state: MathModelingState) -> dict:
             break
         prev_err = result.stderr
 
-    return {"code_artifacts": artifacts}
+    delta: dict = {"code_artifacts": artifacts}
+    if not any(a.success for a in artifacts):
+        # 全部 attempts 都失败：显式写 error 让 writer / paper_critic 看到，
+        # 避免 IRON RULE 1（"数字必须可追溯"）被失败 stdout 偷偷绕过。
+        # 前缀与 sensitivity_node 的 "sensitivity: ..." 约定对齐。
+        last_stderr = artifacts[-1].stderr if artifacts else ""
+        delta["errors"] = [
+            f"coder: 所有 {len(artifacts)} 次尝试均失败；最后一次 stderr 节选：{last_stderr[:300]}"
+        ]
+    return delta
