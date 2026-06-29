@@ -133,7 +133,8 @@ def latex_node(state: MathModelingState) -> dict:
     })
     safe_sens = [
         SensitivityRun(
-            parameter=r.parameter, values=r.values, metric=r.metric,
+            parameter=r.parameter.replace("_", r"\_"),  # paragraph{} 是 text mode，_ 会切到 math
+            values=r.values, metric=r.metric,
             results=r.results, interpretation=_prepare_section(r.interpretation),
             figure_path=r.figure_path,
         )
