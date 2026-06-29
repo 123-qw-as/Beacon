@@ -125,3 +125,39 @@ def test_prompt_contains_chinese_style_blocklist():
     assert "深入探讨" in p
     assert "至关重要" in p
     assert "众所周知" in p
+
+
+def test_writer_increments_writer_iteration(mocker):
+    fake = PaperSections(
+        abstract="a"*200, problem_restatement="b"*200, assumptions="c"*200,
+        notation="d"*200, model_section="e"*200, solution="f"*200,
+        sensitivity="s"*200, conclusion="g"*200, references="h",
+    )
+    mocker.patch("math_agent.nodes.writer.complete", return_value=fake)
+    s = MathModelingState(problem="p")
+    delta = writer_node(s)
+    assert delta["writer_iteration"] == 1
+
+    s2 = MathModelingState(problem="p")
+    s2.writer_iteration = 1
+    delta2 = writer_node(s2)
+    assert delta2["writer_iteration"] == 2
+
+
+def test_prompt_includes_prior_paper_critic_feedback():
+    from math_agent.state import CriticReport
+    s = _rich_state()
+    s.writer_iteration = 1
+    s.critic_reports.append(CriticReport(
+        target="paper", score=4, approved=False,
+        issues=["solution 段的 46 秒数字未在 stdout 中出现"],
+        suggestions=["要么删掉数字，要么改成定性描述"],
+    ))
+    p = build_prompt(s)
+    assert "solution 段的 46 秒数字未在 stdout 中出现" in p
+    assert "要么删掉数字" in p
+
+
+def test_prompt_omits_critic_section_when_no_prior_review():
+    p = build_prompt(_rich_state())
+    assert "上一轮 PaperCritic 反馈" not in p

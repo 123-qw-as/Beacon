@@ -15,7 +15,10 @@ def writer_node(state: MathModelingState) -> dict:
         system=SYSTEM,
         model=MODEL_ROUTING["writer"],
     )
-    return {"paper": out}
+    return {
+        "paper": out,
+        "writer_iteration": state.writer_iteration + 1,
+    }
 
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"

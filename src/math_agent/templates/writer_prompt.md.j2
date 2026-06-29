@@ -8,6 +8,29 @@
 
 ---
 
+{% if prior_critic %}
+## 上一轮 PaperCritic 反馈（必须逐条回应）
+
+PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.approved }}。
+
+**issues**：
+{% for i in prior_critic.issues %}
+- {{ i }}
+{% endfor %}
+
+**suggestions**：
+{% for s in prior_critic.suggestions %}
+- {{ s }}
+{% endfor %}
+
+本次重写时**必须**：
+1. 逐条回应上述 issues；不能简单复述上一稿。
+2. IRON RULE 1（禁编造）仍然铁律。如果上一轮被指出"数字编造"，本轮要么把数字改成定性描述，要么完全删除该数字。
+3. 不要为了"看起来回应了" 而硬塞新数字——没有就写没有。
+
+---
+
+{% endif %}
 ## 题目
 {{ problem }}
 

@@ -35,4 +35,5 @@ def build_prompt(state: MathModelingState) -> str:
         code_artifacts=state.code_artifacts,
         sensitivity_runs=state.sensitivity_runs,
         figures=state.figures,
+        prior_critic=state.latest_critic("paper"),
     )
