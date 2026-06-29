@@ -23,3 +23,4 @@ MODEL_ROUTING = {
 MAX_MODEL_ITERATIONS = 3       # basic -> improved -> final 之外的修正轮次
 MAX_WRITER_ITERATIONS = 2      # paper_critic 未通过时 writer 最多重写次数
 MAX_LLM_RETRIES = 2            # 单次 LLM 调用的结构化解析重试
+MAX_CODE_RETRIES = 1           # coder / sensitivity 沙箱失败后再给一次机会，避免成本失控
