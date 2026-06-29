@@ -88,5 +88,10 @@ def test_state_has_evaluation_default_none():
 
 
 def test_state_has_human_decision_default_none():
-    s = MathModelingState(problem="p")
+    s = MathModelingState(problem="x")
     assert s.human_decision is None
+
+
+def test_writer_iteration_defaults_to_zero():
+    s = MathModelingState(problem="x")
+    assert s.writer_iteration == 0

@@ -120,6 +120,7 @@ class MathModelingState(BaseModel):
 
     # 流程控制（覆盖语义）
     iteration: int = 0
+    writer_iteration: int = 0           # 写作阶段的重试计数（paper_critic 闭环用）
     stage_target: ModelStage = "basic"  # 当前要产出的阶段
     errors: Annotated[list[str], add] = Field(default_factory=list)
 
