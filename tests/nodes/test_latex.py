@@ -1,5 +1,5 @@
 from math_agent.state import MathModelingState, PaperSections
-from math_agent.nodes.latex import latex_node
+from math_agent.nodes.latex import latex_node, _wrap_unicode_math, _md_headings_to_latex
 
 
 def _state(workdir):
@@ -36,3 +36,57 @@ def test_latex_node_records_pdf_path_on_success(mocker, workdir):
     delta = latex_node(s)
     assert (workdir / "paper.tex").exists()
     assert delta == {} or "errors" not in delta
+
+
+def test_wrap_unicode_math_handles_greek_and_relations():
+    out = _wrap_unicode_math("参数 α 满足 σ ≥ 0，误差 ±5")
+    assert r"$\alpha$" in out
+    assert r"$\sigma$" in out
+    assert r"$\geq$" in out
+    assert r"$\pm$" in out
+    assert "参数" in out
+
+
+def test_wrap_unicode_math_skips_inside_existing_math():
+    """已在 $...$ 内的不再二次包裹。"""
+    out = _wrap_unicode_math(r"$\sigma_d$ 与 σ_r")
+    assert out.count("$") % 2 == 0
+    assert r"$\sigma$" in out  # σ_r 这种孤立的会被处理（_r 是 writer 责任）
+
+
+def test_wrap_unicode_math_no_op_on_pure_text():
+    s = "纯中文与 ascii 段落 abc 123."
+    assert _wrap_unicode_math(s) == s
+
+
+def test_md_headings_to_latex():
+    """### basic阶段 → \\subsubsection*{basic阶段}（带 *：不进目录）。"""
+    s = "### basic阶段\n内容\n\n## 章节"
+    out = _md_headings_to_latex(s)
+    assert r"\subsubsection*{basic阶段}" in out
+    assert r"\subsection*{章节}" in out
+    assert "###" not in out
+    assert "## 章节" not in out
+
+
+def test_md_headings_only_match_line_start():
+    """正文里普通 # 不当标题（如 markdown 内联用法、注释）。"""
+    s = "成本 #1 是 ## 5\n# title\nbody"
+    out = _md_headings_to_latex(s)
+    assert "成本 #1 是 ## 5" in out  # 行内 # 不动
+    assert r"\section*{title}" in out
+
+
+def test_latex_node_processes_markdown_in_paper(mocker, workdir):
+    """端到端：paper 段含 ### 三级标题与 unicode 数学，渲到 tex 后两者都被处理。"""
+    mocker.patch(
+        "math_agent.nodes.latex.compile_latex",
+        return_value=type("R", (), {"success": True, "pdf_path": "", "log": ""})(),
+    )
+    s = _state(workdir)
+    s.paper.model_section = "### basic阶段\n参数 σ 是常数。"
+    latex_node(s)
+    tex = (workdir / "paper.tex").read_text(encoding="utf-8")
+    assert r"\subsubsection*{basic阶段}" in tex
+    assert r"$\sigma$" in tex
+    assert "###" not in tex
