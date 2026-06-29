@@ -123,3 +123,43 @@ def test_graph_writes_paper_md(mocker, workdir):
     md = (workdir / "paper.md").read_text(encoding="utf-8")
     assert "## 摘要" in md
     assert "## 6. 敏感性分析" in md
+
+
+def test_writer_paper_critic_loop_isolated(mocker):
+    """隔离测试 writer↔paper_critic 闭环。第一次 critic 拒，第二次通过 → writer 调 2 次。"""
+    from langgraph.graph import StateGraph, END
+    from math_agent.state import MathModelingState as _S
+    from math_agent.nodes.writer import writer_node
+    from math_agent.nodes.paper_critic import paper_critic_node
+    from math_agent.routing import after_paper_critic
+
+    paper_v1 = PaperSections(abstract="v1"*100, problem_restatement="x"*150,
+                             assumptions="x"*150, notation="x"*150,
+                             model_section="x"*400, solution="x"*200,
+                             sensitivity="x"*150, conclusion="x"*150, references="-")
+    paper_v2 = PaperSections(abstract="v2"*100, problem_restatement="x"*150,
+                             assumptions="x"*150, notation="x"*150,
+                             model_section="x"*400, solution="x"*200,
+                             sensitivity="x"*150, conclusion="x"*150, references="-")
+    mocker.patch("math_agent.nodes.writer.complete", side_effect=[paper_v1, paper_v2])
+    mocker.patch("math_agent.nodes.paper_critic.complete", side_effect=[
+        CriticReport(target="paper", score=4, approved=False,
+                     issues=["编数字"], suggestions=["改定性"]),
+        CriticReport(target="paper", score=9, approved=True),
+    ])
+
+    g = StateGraph(_S)
+    g.add_node("writer", writer_node)
+    g.add_node("paper_critic", paper_critic_node)
+    g.set_entry_point("writer")
+    g.add_edge("writer", "paper_critic")
+    g.add_conditional_edges("paper_critic", after_paper_critic,
+                            {"retry": "writer", "advance": END})
+    compiled = g.compile()
+
+    final = compiled.invoke({"problem": "p"})
+    assert final["writer_iteration"] == 2
+    assert final["paper"].abstract.startswith("v2")
+    paper_critics = [r for r in final["critic_reports"] if r.target == "paper"]
+    assert len(paper_critics) == 2
+    assert paper_critics[-1].approved is True

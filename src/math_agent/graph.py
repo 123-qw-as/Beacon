@@ -15,7 +15,7 @@ from math_agent.nodes.paper_critic import paper_critic_node
 from math_agent.nodes.evaluation import evaluation_node
 from math_agent.nodes.human_review import human_review_node
 from math_agent.nodes.latex import latex_node
-from math_agent.routing import after_model_critic
+from math_agent.routing import after_model_critic, after_paper_critic
 
 
 def _advance_stage(state: MathModelingState) -> dict:
@@ -54,7 +54,11 @@ def build_graph(
     g.add_edge("sensitivity", "figure_pipeline")
     g.add_edge("figure_pipeline", "writer")
     g.add_edge("writer", "paper_critic")
-    g.add_edge("paper_critic", "evaluation")
+    g.add_conditional_edges(
+        "paper_critic",
+        after_paper_critic,
+        {"retry": "writer", "advance": "evaluation"},
+    )
     g.add_edge("evaluation", "human_review")
     g.add_edge("human_review", "latex")
     g.add_edge("latex", END)
