@@ -161,3 +161,12 @@ def test_prompt_includes_prior_paper_critic_feedback():
 def test_prompt_omits_critic_section_when_no_prior_review():
     p = build_prompt(_rich_state())
     assert "上一轮 PaperCritic 反馈" not in p
+
+
+def test_prompt_includes_latex_compat_rule():
+    """IRON RULE 4：数学符号 $...$、禁 markdown 标题、禁裸 % # &。"""
+    p = build_prompt(_rich_state())
+    assert "LaTeX 兼容" in p
+    assert "$...$" in p
+    assert "希腊字母" in p
+    assert "markdown 标题" in p
