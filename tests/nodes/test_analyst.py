@@ -17,3 +17,26 @@ def test_analyst_appends_assumptions(mocker):
     assert "assumptions" in delta
     assert len(delta["assumptions"]) == 2
     assert delta["assumptions"][0].statement == "需求服从泊松"
+
+
+def test_analyst_does_not_query_rag_when_disabled(mocker):
+    mocker.patch("math_agent.nodes.analyst.RAG_ENABLED", False)
+    spy = mocker.patch("math_agent.nodes.analyst.search")
+    mocker.patch(
+        "math_agent.nodes.analyst.complete",
+        return_value=AnalystOutput(assumptions=[]),
+    )
+    analyst_node(MathModelingState(problem="p"))
+    spy.assert_not_called()
+
+
+def test_analyst_queries_rag_when_enabled(mocker):
+    mocker.patch("math_agent.nodes.analyst.RAG_ENABLED", True)
+    mocker.patch("math_agent.nodes.analyst.RAG_DB_PATH", "/tmp/nonexistent.db")
+    spy = mocker.patch("math_agent.nodes.analyst.search", return_value=[])
+    mocker.patch(
+        "math_agent.nodes.analyst.complete",
+        return_value=AnalystOutput(assumptions=[]),
+    )
+    analyst_node(MathModelingState(problem="p"))
+    spy.assert_called_once()
