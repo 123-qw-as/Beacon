@@ -22,16 +22,29 @@ class IngestReport:
     skipped: list[str]
 
 
+def _sanitize_text(s: str) -> str:
+    """剥掉 lone-surrogate / NUL 等 utf-8 不能编码的字符。
+
+    pypdf 在某些 CID-encoded 中文 PDF 上偶尔产出 lone surrogate（U+D800-U+DFFF），
+    后续 httpx encode_request 会抛 UnicodeEncodeError 把整个 ingest 挂掉。
+    """
+    if not s:
+        return s
+    # encode 一次 utf-8 with errors=ignore，等价于丢掉所有不可编码字符
+    return s.encode("utf-8", errors="ignore").decode("utf-8")
+
+
 def _extract_pdf_text(path: Path) -> str:
     from pypdf import PdfReader
     reader = PdfReader(str(path))
-    return "\n\n".join(page.extract_text() or "" for page in reader.pages)
+    raw = "\n\n".join(page.extract_text() or "" for page in reader.pages)
+    return _sanitize_text(raw)
 
 
 def _read_file(path: Path) -> str:
     if path.suffix.lower() == ".pdf":
         return _extract_pdf_text(path)
-    return path.read_text(encoding="utf-8")
+    return _sanitize_text(path.read_text(encoding="utf-8", errors="ignore"))
 
 
 def ingest_directory(
