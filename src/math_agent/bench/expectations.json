@@ -1,0 +1,14 @@
+{
+  "2022_A": {
+    "min_overall": 6.5,
+    "must_contain_keywords": ["覆盖", "无人机", "鲁棒"],
+    "must_have_sensitivity": true,
+    "must_have_figures": true
+  },
+  "2023_B": {
+    "min_overall": 6.5,
+    "must_contain_keywords": ["内涝", "排水", "风险"],
+    "must_have_sensitivity": true,
+    "must_have_figures": true
+  }
+}
