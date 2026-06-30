@@ -252,21 +252,21 @@ def _md_table_to_latex(s: str) -> str:
             if sep.startswith("|") and set(sep) <= set("|-: "):
                 header_cells = [c.strip() for c in line.strip().strip("|").split("|")]
                 ncols = len(header_cells)
-                # tabularx 自适应列宽（gmcmthesis 已 RequirePackage{tabularx}）；
-                # 第一列窄一点（符号/编号），其余等分。3 列以下也走一致策略。
-                col_spec = "|" + "X|" * ncols
+                # tabularx 自适应列宽 + booktabs 三线表（gmcmthesis 已 RequirePackage 二者）
+                # 三线表惯例：\toprule（顶）/ \midrule（表头下）/ \bottomrule（底），中间无横线
+                col_spec = "X" * ncols  # tabularx X 列等分 \linewidth；三线表不画竖线
                 tbl = [r"\begin{tabularx}{\linewidth}{" + col_spec + r"}",
-                       r"\hline",
+                       r"\toprule",
                        " & ".join(header_cells) + r" \\",
-                       r"\hline"]
+                       r"\midrule"]
                 j = i + 2
                 while j < len(lines) and lines[j].lstrip().startswith("|"):
                     cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
                     # 对齐列数（缺则补空，多则截）
                     cells = (cells + [""] * ncols)[:ncols]
                     tbl.append(" & ".join(cells) + r" \\")
-                    tbl.append(r"\hline")
                     j += 1
+                tbl.append(r"\bottomrule")
                 tbl.append(r"\end{tabularx}")
                 # 表格前后留空行让 LaTeX 不把表格挤进段落
                 out.append("")
@@ -297,6 +297,60 @@ def _escape_remaining_underscores(s: str) -> str:
     return "$".join(parts)
 
 
+# 长 inline math token：含 `=` 或 `\leq` / `\geq` / `\sum` / `\prod` 且长度 >= 10
+# → 提为独占行 equation（带自动编号）
+_LONG_MATH_INDICATORS = ("=", r"\leq", r"\geq", r"\sum", r"\prod", r"\int", r"\le ", r"\ge ", "\\le}", "\\ge}")
+
+
+def _promote_inline_equations(s: str) -> str:
+    r"""把段内"独立式"长公式从 `$...$` 提升为 `\begin{equation}...\end{equation}`（带编号）。
+
+    判定规则：行内 `$...$` 满足以下全部条件 → 提升
+      1. 内容包含等号或 \\sum/\\prod/\\int/\\leq/\\geq
+      2. 长度 >= 10 字符（避免 $x=1$ 这种简短赋值被打散）
+      3. 周围以中文标点（。，；：）或行边界结尾 → 说明 writer 用它当独立式
+
+    不动：行内简单引用（`$x_i$`、`$\\alpha$`）；多个连续 inline math。
+    """
+    if not s or "$" not in s:
+        return s
+
+    def _is_long_equation(content: str) -> bool:
+        if len(content) < 10:
+            return False
+        return any(ind in content for ind in _LONG_MATH_INDICATORS)
+
+    out = []
+    i = 0
+    while i < len(s):
+        if s[i] == "$":
+            # 找匹配 $
+            end = s.find("$", i + 1)
+            if end == -1:
+                out.append(s[i:])
+                break
+            content = s[i + 1:end]
+            after = s[end + 1:end + 2]
+            before = s[max(0, i - 1):i]
+            # before 是中文标点或行首/换行；after 是中文标点或行末/换行
+            sep_chars = set("。，；：、 \n\t")
+            before_ok = before == "" or before in sep_chars or before in "。，；：、"
+            after_ok = after == "" or after in sep_chars or after in "。，；：、"
+            if _is_long_equation(content) and before_ok and after_ok:
+                # 提升为 equation 块
+                out.append("\n\\begin{equation}\n" + content + "\n\\end{equation}\n")
+                i = end + 1
+                continue
+            # 保留 inline
+            out.append(s[i:end + 1])
+            i = end + 1
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
+
 def _prepare_section(s: str) -> str:
     """paper 段渲染前预处理：链式确定性转换，全部跳过已有 $...$。
 
@@ -319,6 +373,7 @@ def _prepare_section(s: str) -> str:
     s = _md_inline_code_to_math(s)
     s = _wrap_naked_subscripts(s)
     s = _wrap_unicode_math(s)
+    s = _promote_inline_equations(s)
     s = _escape_remaining_underscores(s)
     return s
 

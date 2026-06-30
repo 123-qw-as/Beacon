@@ -2,7 +2,7 @@ from math_agent.state import MathModelingState, PaperSections
 from math_agent.nodes.latex import (
     latex_node, _wrap_unicode_math, _md_headings_to_latex, _md_inline_code_to_math,
     _wrap_naked_subscripts, _md_bold_to_latex, _md_bullets_to_latex, _md_table_to_latex,
-    _escape_remaining_underscores,
+    _escape_remaining_underscores, _promote_inline_equations,
 )
 
 
@@ -224,13 +224,45 @@ def test_md_table_to_latex():
 
 下文。"""
     out = _md_table_to_latex(s)
-    assert r"\begin{tabularx}{\linewidth}{|X|X|X|}" in out
+    # 三线表（booktabs）：toprule/midrule/bottomrule，列规范不带竖线
+    assert r"\begin{tabularx}{\linewidth}{XXX}" in out
+    assert r"\toprule" in out
+    assert r"\midrule" in out
+    assert r"\bottomrule" in out
     assert r"符号 & 含义 & 单位 \\" in out
     assert r"S_i & 库存 & 辆 \\" in out
     assert r"\end{tabularx}" in out
+    # 数据行间不再有 \hline
+    assert r"\hline" not in out
     assert "|------|" not in out
     assert "| 符号 |" not in out
     assert "下文。" in out
+
+
+def test_promote_inline_equations_promotes_long_equation():
+    """段内独立的长公式（含 =）应被提升为 equation 块。"""
+    s = "调度后存量满足 $\\eta_i = s_i + x_i - y_i + \\xi_i$。其余约束如下。"
+    out = _promote_inline_equations(s)
+    assert r"\begin{equation}" in out
+    assert r"\end{equation}" in out
+    assert r"\eta_i = s_i + x_i - y_i + \xi_i" in out
+
+
+def test_promote_inline_equations_leaves_short_inline():
+    """短的 inline math（$x_i$、$\\alpha$）不提升。"""
+    s = "参数 $x_i$ 和 $\\alpha$ 控制需求。"
+    out = _promote_inline_equations(s)
+    assert r"\begin{equation}" not in out
+    assert "$x_i$" in out
+    assert r"$\alpha$" in out
+
+
+def test_promote_inline_equations_skips_when_no_separator():
+    """行内夹在中文段中的简短 inline math 不动（即便长一点）。"""
+    s = "因此$\\sum x_i$代表所有调度量。"
+    out = _promote_inline_equations(s)
+    # 前后是中文（非空格/标点），不提升
+    assert r"\begin{equation}" not in out
 
 
 def test_md_table_to_latex_no_op_when_no_table():
