@@ -164,25 +164,124 @@ def _wrap_naked_subscripts(s: str) -> str:
     return "$".join(parts)
 
 
-def _prepare_section(s: str) -> str:
-    """paper 段渲染前预处理：4 步链式确定性转换，全部跳过已有 $...$。
+# ===== Markdown 排版 → LaTeX 命令 =====
 
-    顺序：
-    1. markdown 标题 `### xxx` → `\\subsubsection*{xxx}`
-    2. markdown 反引号 `` `S_i` `` → `$S_i$`（内容里的 unicode 同步展开）
-    3. 裸 LaTeX 下标 `D_i` → `$D_i$`（writer 漏的兜底）
-    4. unicode 数学符号 α → `$\\alpha$`（在 $...$ 之外的）
+# 加粗内容不能以空白开头/结尾（避免 "普通 ** 段; **" 被当作一对）
+_BOLD_RE = re.compile(r"\*\*(\S(?:[^\*\n]*?\S)?)\*\*")
 
-    **不调 _latex_escape**——writer 在 paper 段会故意写 LaTeX inline math
-    和 markdown 表格，escape 会破坏。
+
+def _md_bold_to_latex(s: str) -> str:
+    """**xxx** → \\textbf{xxx}。LaTeX 不认 markdown 加粗。"""
+    if not s:
+        return s
+    return _BOLD_RE.sub(r"\\textbf{\1}", s)
+
+
+_BULLET_RE = re.compile(r"^[ \t]*[-*+]\s+(.+)$", re.MULTILINE)
+
+
+def _md_bullets_to_latex(s: str) -> str:
+    """连续的 `- xxx` 行 → \\begin{itemize} ... \\end{itemize}。
+
+    简单做法：扫每一行，识别 bullet 行；连续 bullet 段开头加 begin、结束加 end。
     """
-    return _wrap_unicode_math(
-        _wrap_naked_subscripts(
-            _md_inline_code_to_math(
-                _md_headings_to_latex(s)
-            )
-        )
-    )
+    if not s or "\n" not in s and not s.startswith(("-", "*", "+")):
+        return s
+    lines = s.split("\n")
+    out = []
+    in_list = False
+    for line in lines:
+        m = _BULLET_RE.match(line)
+        if m:
+            if not in_list:
+                out.append(r"\begin{itemize}")
+                in_list = True
+            out.append(r"\item " + m.group(1))
+        else:
+            if in_list:
+                out.append(r"\end{itemize}")
+                in_list = False
+            out.append(line)
+    if in_list:
+        out.append(r"\end{itemize}")
+    return "\n".join(out)
+
+
+def _md_table_to_latex(s: str) -> str:
+    """markdown pipe-table → LaTeX tabular。
+
+    识别连续行：
+        | h1 | h2 |
+        |----|----|
+        | a  | b  |
+
+    转成：
+        \\begin{tabular}{|l|l|}\\hline h1 & h2 \\\\\\hline a & b \\\\\\hline \\end{tabular}
+
+    分隔行 (`---`) 用来确定列数；之前一行作 header。
+    不在表内的 `|` 不动。
+    """
+    if not s or "|" not in s:
+        return s
+    lines = s.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # 检测表头模式：当前行 | 开头 + 至少一个 | + 下一行是分隔行
+        if line.lstrip().startswith("|") and i + 1 < len(lines):
+            sep = lines[i + 1].strip()
+            # 分隔行只含 |、-、:、空格
+            if sep.startswith("|") and set(sep) <= set("|-: "):
+                header_cells = [c.strip() for c in line.strip().strip("|").split("|")]
+                ncols = len(header_cells)
+                col_spec = "|" + "l|" * ncols
+                tbl = [r"\begin{tabular}{" + col_spec + r"}",
+                       r"\hline",
+                       " & ".join(header_cells) + r" \\",
+                       r"\hline"]
+                j = i + 2
+                while j < len(lines) and lines[j].lstrip().startswith("|"):
+                    cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
+                    # 对齐列数（缺则补空，多则截）
+                    cells = (cells + [""] * ncols)[:ncols]
+                    tbl.append(" & ".join(cells) + r" \\")
+                    tbl.append(r"\hline")
+                    j += 1
+                tbl.append(r"\end{tabular}")
+                # 表格前后留空行让 LaTeX 不把表格挤进段落
+                out.append("")
+                out.extend(tbl)
+                out.append("")
+                i = j
+                continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
+
+def _prepare_section(s: str) -> str:
+    """paper 段渲染前预处理：链式确定性转换，全部跳过已有 $...$。
+
+    顺序敏感：
+    1. markdown 表格 → tabular（在 inline code/heading 之前；表格里可能有 backtick 数学）
+    2. markdown 标题 `### xxx` → `\\subsubsection*{xxx}`
+    3. markdown 加粗 `**x**` → `\\textbf{x}`
+    4. markdown 列表 `- x` → itemize
+    5. markdown 反引号 `` `S_i` `` → `$S_i$`（内容里 unicode 同步展开）
+    6. 裸 LaTeX 下标 `D_i` → `$D_i$`（writer 漏的兜底）
+    7. unicode 数学符号 α → `$\\alpha$`（在 $...$ 之外的）
+
+    **不调 _latex_escape**——writer 在 paper 段会故意写 LaTeX inline math。
+    """
+    s = _md_table_to_latex(s)
+    s = _md_headings_to_latex(s)
+    s = _md_bold_to_latex(s)
+    s = _md_bullets_to_latex(s)
+    s = _md_inline_code_to_math(s)
+    s = _wrap_naked_subscripts(s)
+    s = _wrap_unicode_math(s)
+    return s
 
 
 def latex_node(state: MathModelingState) -> dict:
@@ -190,11 +289,12 @@ def latex_node(state: MathModelingState) -> dict:
     workdir.mkdir(parents=True, exist_ok=True)
 
     # ponytail: 为图重打一份 LaTeX 安全视图，避免 caption/path 里的 _/&/% 炸编译
+    # caption 限到约 55 字（包含完整结尾标点），analysis 给完整版用作正文段
     safe_figures = [
         FigureArtifact(
             path=_latex_path(f.path),
             purpose=_latex_escape(f.purpose),
-            caption=_latex_escape(f.caption or f.purpose),
+            caption=_latex_escape((f.caption or f.purpose)[:55]),
             quality_score=f.quality_score,
             quality_issues=list(f.quality_issues),
             analysis=_latex_escape(f.analysis),
@@ -202,7 +302,7 @@ def latex_node(state: MathModelingState) -> dict:
         for f in state.figures
     ]
 
-    # paper 各段做 markdown 标题 + unicode 数学的确定性预处理
+    # paper 各段做 markdown → LaTeX 的确定性预处理（粗体/表格/列表/标题/数学）
     safe_paper = PaperSections(**{
         k: _prepare_section(v) if isinstance(v, str) else v
         for k, v in state.paper.model_dump().items()
@@ -217,9 +317,12 @@ def latex_node(state: MathModelingState) -> dict:
         for r in state.sensitivity_runs
     ]
 
+    # title 取 problem 第一行（避免把整段问题描述塞进 \title{}）
+    title_line = state.problem.split("\n", 1)[0].strip()
+
     tmpl = _env.get_template("paper.tex.j2")
     tex = tmpl.render(
-        problem=_latex_escape(_wrap_unicode_math(state.problem)),
+        problem=_latex_escape(_wrap_unicode_math(title_line)),
         paper=safe_paper, figures=safe_figures, sensitivity_runs=safe_sens,
     )
     tex_path = workdir / "paper.tex"

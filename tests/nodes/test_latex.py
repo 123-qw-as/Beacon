@@ -1,7 +1,7 @@
 from math_agent.state import MathModelingState, PaperSections
 from math_agent.nodes.latex import (
     latex_node, _wrap_unicode_math, _md_headings_to_latex, _md_inline_code_to_math,
-    _wrap_naked_subscripts,
+    _wrap_naked_subscripts, _md_bold_to_latex, _md_bullets_to_latex, _md_table_to_latex,
 )
 
 
@@ -154,3 +154,87 @@ def test_latex_node_processes_markdown_in_paper(mocker, workdir):
     assert r"\subsubsection*{basic阶段}" in tex
     assert r"$\sigma$" in tex
     assert "###" not in tex
+
+
+def test_md_bold_to_latex():
+    s = "**假设1**：内容; 普通 ** 段; **依据**：x"
+    out = _md_bold_to_latex(s)
+    assert r"\textbf{假设1}" in out
+    assert r"\textbf{依据}" in out
+    # 中间带空白起头的孤立 ** 不被错配（仍保留至少一处）
+    assert "** 段;" in out
+
+
+def test_md_bold_skips_whitespace_only():
+    """**     ** 这种空白粗体不动。"""
+    s = "**   **"
+    assert _md_bold_to_latex(s) == s
+
+
+def test_md_bullets_to_latex():
+    s = "段落起头\n- a 项\n- b 项\n\n下一段\n* c 项"
+    out = _md_bullets_to_latex(s)
+    assert r"\begin{itemize}" in out
+    assert r"\item a 项" in out
+    assert r"\item b 项" in out
+    assert r"\item c 项" in out
+    assert r"\end{itemize}" in out
+
+
+def test_md_table_to_latex():
+    s = """符号说明前导。
+| 符号 | 含义 | 单位 |
+|------|------|------|
+| S_i | 库存 | 辆 |
+| D_i | 需求 | 辆 |
+
+下文。"""
+    out = _md_table_to_latex(s)
+    assert r"\begin{tabular}{|l|l|l|}" in out
+    assert r"符号 & 含义 & 单位 \\" in out
+    assert r"S_i & 库存 & 辆 \\" in out
+    assert r"\end{tabular}" in out
+    assert "|------|" not in out
+    assert "| 符号 |" not in out
+    assert "下文。" in out
+
+
+def test_md_table_to_latex_no_op_when_no_table():
+    s = "无表格段落，但有 | 符号 |。"
+    assert _md_table_to_latex(s) == s
+
+
+def test_latex_node_title_only_first_line(mocker, workdir):
+    """title 只取 problem 第一行，避免长问题描述塞进标题。"""
+    mocker.patch(
+        "math_agent.nodes.latex.compile_latex",
+        return_value=type("R", (), {"success": True, "pdf_path": "", "log": ""})(),
+    )
+    s = _state(workdir)
+    s.problem = "城市共享单车调度优化\n建立模型预测各站点未来一小时的需求量。\n在不超过 100 辆运力的前提下，设计最优调度方案。"
+    latex_node(s)
+    tex = (workdir / "paper.tex").read_text(encoding="utf-8")
+    assert r"\title{城市共享单车调度优化}" in tex
+    # 问题正文不应进入 title 命令
+    assert r"建立模型预测各站点未来" not in tex.split(r"\title{")[1].split("}")[0]
+
+
+def test_latex_node_figure_caption_truncated(mocker, workdir):
+    """figure caption 截到 55 字，避免标题占两行。"""
+    from math_agent.state import FigureArtifact
+    mocker.patch(
+        "math_agent.nodes.latex.compile_latex",
+        return_value=type("R", (), {"success": True, "pdf_path": "", "log": ""})(),
+    )
+    s = _state(workdir)
+    s.figures.append(FigureArtifact(
+        path="a.png", purpose="test",
+        caption="这是一段非常长的图说" * 10,  # 90 字
+        analysis="完整分析" * 20,
+    ))
+    latex_node(s)
+    tex = (workdir / "paper.tex").read_text(encoding="utf-8")
+    # caption 出现在 \caption{} 内，限 55 字
+    import re
+    m = re.search(r"\\caption\{([^}]+)\}", tex)
+    assert m and len(m.group(1)) <= 56  # +1 容忍尾标点
