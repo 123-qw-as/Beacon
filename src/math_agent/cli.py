@@ -1,7 +1,10 @@
-"""math-agent CLI（Plan B 版）。
+"""math-agent CLI（Plan C 版）。
 
-run    : 启动一次任务（默认在 human_review 处中断）
-resume : 提供 human decision 并续跑
+run     : 启动一次任务（默认在 human_review 处中断）
+resume  : 提供 human decision 并续跑
+report  : 打印一次运行的 trace 报告
+ingest  : 把语料目录嵌入到向量库（RAG 索引）
+bench   : 真跑历年题回归基准（live 模式）
 """
 from __future__ import annotations
 import json
@@ -9,9 +12,12 @@ from pathlib import Path
 
 import typer
 from langgraph.checkpoint.sqlite import SqliteSaver
+from rich.console import Console
+from rich.table import Table
 
 from math_agent.graph import build_graph
 from math_agent.state import HumanDecision
+from math_agent.tracing import Tracer, set_current, reset_current
 
 
 app = typer.Typer(help="Math modeling multi-agent system.")
@@ -53,14 +59,20 @@ def run(
         "team_id": team_id or None,
         "members": members or None,
     }
-    with _saver_cm(out) as saver:
-        g = build_graph(checkpointer=saver, interrupt_before=interrupt)
-        g.invoke(initial, config=_config(thread))
+    tracer = Tracer(thread_id=thread, out_dir=out)
+    tok = set_current(tracer)
+    try:
+        with _saver_cm(out) as saver:
+            g = build_graph(checkpointer=saver, interrupt_before=interrupt)
+            g.invoke(initial, config=_config(thread))
+    finally:
+        tracer.flush()
+        reset_current(tok)
     if interrupt:
-        typer.echo(f"pipeline paused before human_review (thread={thread}).")
+        typer.echo(f"pipeline paused before human_review (thread={thread}); trace at {out / 'trace.json'}")
         typer.echo(f"use `math-agent resume --out {out} --thread {thread} --approve` to continue.")
     else:
-        typer.echo(f"done. paper at {out / 'paper.md'}")
+        typer.echo(f"done. paper at {out / 'paper.md'}; trace at {out / 'trace.json'}")
 
 
 @app.command()
@@ -70,12 +82,75 @@ def resume(
     approve: bool = typer.Option(True),
     notes: str = typer.Option(""),
 ):
-    with _saver_cm(out) as saver:
-        g = build_graph(checkpointer=saver, interrupt_before=["human_review"])
-        g.update_state(_config(thread),
-                       {"human_decision": HumanDecision(approved=approve, notes=notes)})
-        g.invoke(None, config=_config(thread))
+    tracer = Tracer(thread_id=thread, out_dir=out)
+    tok = set_current(tracer)
+    try:
+        with _saver_cm(out) as saver:
+            g = build_graph(checkpointer=saver, interrupt_before=["human_review"])
+            g.update_state(_config(thread),
+                           {"human_decision": HumanDecision(approved=approve, notes=notes)})
+            g.invoke(None, config=_config(thread))
+    finally:
+        tracer.flush()
+        reset_current(tok)
     typer.echo(f"done. tex/md written to {out}")
+
+
+@app.command()
+def report(out: Path = typer.Option(Path("runs/latest"))):
+    """打印一次运行的 trace 报告 + per-model / per-node 摘要。"""
+    trace_path = out / "trace.json"
+    if not trace_path.exists():
+        typer.echo(f"no trace at {trace_path}")
+        raise typer.Exit(1)
+    blob = json.loads(trace_path.read_text(encoding="utf-8"))
+
+    c = Console()
+    t = Table(title=f"Run report ({blob['thread_id']})")
+    t.add_column("metric"); t.add_column("value")
+    t.add_row("LLM calls", str(blob["llm_calls"]))
+    t.add_row("Prompt tokens", str(blob["tokens"]["prompt"]))
+    t.add_row("Completion tokens", str(blob["tokens"]["completion"]))
+    c.print(t)
+
+    tm = Table(title="Per model")
+    tm.add_column("model"); tm.add_column("calls"); tm.add_column("prompt"); tm.add_column("completion")
+    for m, d in blob.get("per_model", {}).items():
+        tm.add_row(m, str(d["calls"]), str(d["prompt_tokens"]), str(d["completion_tokens"]))
+    c.print(tm)
+
+    tn = Table(title="Nodes")
+    tn.add_column("node"); tn.add_column("duration_ms")
+    for n in blob.get("nodes", []):
+        tn.add_row(n["name"], str(n["duration_ms"]))
+    c.print(tn)
+
+
+@app.command()
+def ingest(
+    src: Path = typer.Option(..., exists=True, readable=True),
+    db: Path = typer.Option(Path("runs/rag.sqlite")),
+    embedding_model: str = typer.Option("text-embedding-3-small"),
+    dim: int = typer.Option(1536),
+):
+    """扫描语料目录 → 切块 → 嵌入 → 入 sqlite-vec 库。"""
+    from math_agent.rag.ingest import ingest_directory
+    rep = ingest_directory(src_dir=src, db_path=db,
+                           embedding_model=embedding_model, dim=dim)
+    typer.echo(f"files={rep.files_processed} chunks={rep.chunks_added} skipped={len(rep.skipped)}")
+
+
+@app.command()
+def bench(out: Path = typer.Option(Path("runs/bench"))):
+    """真跑历年题回归基准（live 模式，需要真 LLM API key）。
+
+    要跑 mock 模式（结构性校验，不消耗 API），用：pytest tests/bench/
+    """
+    from math_agent.bench.runner import run_bench
+    rep = run_bench(out_dir=out)
+    for c in rep.cases:
+        flag = "PASS" if c.passed else "FAIL"
+        typer.echo(f"[{flag}] {c.problem_id} overall={c.overall} failures={c.failures}")
 
 
 if __name__ == "__main__":

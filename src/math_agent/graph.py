@@ -22,24 +22,37 @@ def _advance_stage(state: MathModelingState) -> dict:
     return {"stage_target": {"basic": "improved", "improved": "final"}[state.stage_target], "iteration": 0}
 
 
+def _wrap(fn, name: str):
+    """如当前 contextvar 上有 Tracer，按节点名打点；没有则原样调用。"""
+    def _inner(s):
+        from math_agent.tracing import get_current
+        tracer = get_current()
+        if tracer is not None:
+            with tracer.node(name):
+                return fn(s)
+        return fn(s)
+    _inner.__name__ = fn.__name__
+    return _inner
+
+
 def build_graph(
     *,
     checkpointer=None,
     interrupt_before: list[str] | None = None,
 ):
     g = StateGraph(MathModelingState)
-    g.add_node("analyst", analyst_node)
-    g.add_node("modeler", modeler_node)
-    g.add_node("model_critic", model_critic_node)
-    g.add_node("advance_stage", _advance_stage)
-    g.add_node("coder", coder_node)
-    g.add_node("sensitivity", sensitivity_node)
-    g.add_node("figure_pipeline", figure_pipeline_node)
-    g.add_node("writer", writer_node)
-    g.add_node("paper_critic", paper_critic_node)
-    g.add_node("evaluation", evaluation_node)
-    g.add_node("human_review", human_review_node)
-    g.add_node("latex", latex_node)
+    g.add_node("analyst", _wrap(analyst_node, "analyst"))
+    g.add_node("modeler", _wrap(modeler_node, "modeler"))
+    g.add_node("model_critic", _wrap(model_critic_node, "model_critic"))
+    g.add_node("advance_stage", _wrap(_advance_stage, "advance_stage"))
+    g.add_node("coder", _wrap(coder_node, "coder"))
+    g.add_node("sensitivity", _wrap(sensitivity_node, "sensitivity"))
+    g.add_node("figure_pipeline", _wrap(figure_pipeline_node, "figure_pipeline"))
+    g.add_node("writer", _wrap(writer_node, "writer"))
+    g.add_node("paper_critic", _wrap(paper_critic_node, "paper_critic"))
+    g.add_node("evaluation", _wrap(evaluation_node, "evaluation"))
+    g.add_node("human_review", _wrap(human_review_node, "human_review"))
+    g.add_node("latex", _wrap(latex_node, "latex"))
 
     g.set_entry_point("analyst")
     g.add_edge("analyst", "modeler")
