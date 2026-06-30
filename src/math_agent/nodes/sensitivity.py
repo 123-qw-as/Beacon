@@ -10,13 +10,12 @@
 """
 from __future__ import annotations
 
-import ast
 import re
 from pathlib import Path
 
 from pydantic import BaseModel
 
-from math_agent.config import MODEL_ROUTING
+from math_agent.config import MAX_CODE_RETRIES, MODEL_ROUTING
 from math_agent.llm import complete
 from math_agent.prompts.sensitivity import (
     PLAN_SYSTEM, CODE_SYSTEM, INTERPRET_SYSTEM,
@@ -46,18 +45,26 @@ class Interpretations(BaseModel):
 
 
 _RESULT_RE = re.compile(r"RESULT:\s*parameter=(\S+)\s+values=(\[[^\]]+\])\s+results=(\[[^\]]+\])")
+# 只匹配“前面不是字母/数字/下划线/小数点”的数字，避免抓到 np.float64 里的 64
+_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.])-?\d+\.?\d*(?:[eE][+-]?\d+)?")
 
 
 def _parse_results(stdout: str) -> list[tuple[str, list[float], list[float]]]:
+    """从 stdout 中抽 RESULT 行。
+
+    用正则抓 list 里的所有数字，不依赖 ast.literal_eval——后者无法解析
+    `[np.float64(1.0), np.float64(2.0)]` 这类带函数调用的 repr（实际遇过）。
+    """
     out = []
     for line in stdout.splitlines():
         m = _RESULT_RE.search(line)
         if not m:
             continue
         param = m.group(1)
-        values = [float(x) for x in ast.literal_eval(m.group(2))]
-        results = [float(x) for x in ast.literal_eval(m.group(3))]
-        out.append((param, values, results))
+        values = [float(x) for x in _NUMBER_RE.findall(m.group(2))]
+        results = [float(x) for x in _NUMBER_RE.findall(m.group(3))]
+        if values and results:
+            out.append((param, values, results))
     return out
 
 
@@ -78,13 +85,21 @@ def sensitivity_node(state: MathModelingState) -> dict:
     if not plan.runs:
         return {"errors": ["sensitivity: LLM 未给出可执行的 runs"]}
 
-    # 2) CODE
-    code_out: SensitivityCode = complete(
-        build_code_prompt(final, [r.model_dump() for r in plan.runs]),
-        schema=SensitivityCode, system=CODE_SYSTEM,
-        model=MODEL_ROUTING.get("coder"),
-    )
-    sandbox_result = run_python(code_out.code, workdir=workdir, timeout=300)
+    # 2) CODE+RUN（最多重试 MAX_CODE_RETRIES 次，与 coder 一致：失败 stderr 回灌 LLM）
+    sandbox_result = None
+    prev_err: str | None = None
+    for attempt in range(MAX_CODE_RETRIES + 1):
+        code_out: SensitivityCode = complete(
+            build_code_prompt(final, [r.model_dump() for r in plan.runs], prev_err),
+            schema=SensitivityCode, system=CODE_SYSTEM,
+            model=MODEL_ROUTING.get("coder"),
+        )
+        sandbox_result = run_python(
+            code_out.code, workdir=workdir / f"attempt_{attempt}", timeout=300,
+        )
+        if sandbox_result.success:
+            break
+        prev_err = sandbox_result.stderr
     if not sandbox_result.success:
         return {"errors": [f"sensitivity: 扫参代码执行失败：{sandbox_result.stderr[:500]}"]}
 

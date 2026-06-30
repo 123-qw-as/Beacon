@@ -1,0 +1,96 @@
+\documentclass[bwprint]{gmcmthesis}
+\usepackage{amsmath}
+\numberwithin{figure}{section}
+\renewcommand{\thefigure}{\arabic{section}-\arabic{figure}}
+% 覆盖 cls 默认的 `4 . 1` 风格 (thinspace.thinspace) → 改为标准 `4.1`
+\renewcommand\thesubsection{\arabic{section}.\arabic{subsection}}
+\renewcommand\thesubsubsection{\thesubsection.\arabic{subsubsection}}
+
+\title{ {{- problem -}} }
+\baominghao{ {{- team_id | default("No.00000001") -}} }
+\schoolname{ {{- school | default("XX大学") -}} }
+\membera{ {{- member_a | default("队员A") -}} }
+\memberb{ {{- member_b | default("队员B") -}} }
+\memberc{ {{- member_c | default("队员C") -}} }
+
+\begin{document}
+\maketitle
+\begin{abstract}
+{{ paper.abstract }}
+
+\keywords{ {{- keywords | default("数学建模") -}} }
+\end{abstract}
+
+\pagestyle{plain}
+\tableofcontents
+\newpage
+
+\section{问题重述}
+{{ paper.problem_restatement }}
+
+\section{模型假设}
+{{ paper.assumptions }}
+
+\section{符号说明}
+{{ paper.notation }}
+
+\section{模型的建立与求解}
+{{ paper.model_section }}
+
+\subsection{求解过程与结果}
+{{ paper.solution }}
+
+{% if figures %}
+\subsection{关键图表}
+{% for fig in figures %}
+\begin{figure}[!h]
+\centering
+\includegraphics[width=0.75\linewidth]{ {{- fig.path -}} }
+\caption{ {{- fig.caption | default(fig.purpose) -}} }
+\label{fig:{{ loop.index }}}
+\end{figure}
+
+{{ fig.analysis }}
+
+{% endfor %}
+{% endif %}
+
+\section{敏感性分析}
+{{ paper.sensitivity }}
+
+{% for r in sensitivity_runs %}
+\subsubsection*{ {{- r.parameter -}} }
+{{ r.interpretation }}
+
+{% endfor %}
+
+\section{模型的评价}
+{{ paper.conclusion }}
+
+\section{参考文献}
+\begin{thebibliography}{99}
+\setlength{\itemsep}{-2mm}
+{{ paper.references }}
+\end{thebibliography}
+
+{% if code_artifacts %}
+\newpage
+\appendix
+\section{程序代码}
+{% for art in code_artifacts %}
+\subsection[代码 {{ loop.index }}]{ {{- art.purpose -}} }
+\begin{lstlisting}[language=Python]
+{{ art.code }}
+\end{lstlisting}
+
+{% if art.stdout %}
+\subsubsection*{运行输出}
+\begin{verbatim}
+{{ art.stdout }}
+\end{verbatim}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+\end{document}

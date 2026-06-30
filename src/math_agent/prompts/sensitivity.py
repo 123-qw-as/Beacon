@@ -30,18 +30,27 @@ CODE_SYSTEM = (
     "中文字体设置：开头加 `matplotlib.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']; matplotlib.rcParams['axes.unicode_minus']=False`；"
     "用 print 输出 `RESULT: parameter=<名称字面量> values=<list> results=<list>` 行（每个 run 一行），"
     "**parameter 必须是字符串字面量（如 `parameter=alpha`），不要写 `parameter={alpha}` 这种把变量值代入的写法**，"
-    "values/results 用 Python 列表的 repr（例如 `[0.1, 0.2, 0.3]`），方便正则解析。"
+    "values/results 用 Python 列表的 repr（例如 `[0.1, 0.2, 0.3]`），方便正则解析。\n"
+    # 图表质量（参考 nature-figure 准则，与 coder 一致）：
+    "绘图质量要求："
+    "(1) 每张图只论证一个参数的敏感性，title 写 `Sensitivity of <metric> to <parameter>`；"
+    "(2) 必备：title、x 轴=parameter 名+单位、y 轴=metric 名+单位、legend（如多曲线）；"
+    "(3) 发表级 rcParams：savefig dpi≥300、font.size≥10、axes.linewidth=0.8、关闭右上脊柱；"
+    "(4) 配色克制：单参数曲线用一种主色；网格 alpha≤0.3。"
 )
 
 
-def build_code_prompt(model, plan_runs):
+def build_code_prompt(model, plan_runs, prev_failure: str | None = None):
     desc = "\n".join(
         f"- parameter={r['parameter']}, values={r['values']}, metric={r['metric']}"
         for r in plan_runs
     )
+    fb = ""
+    if prev_failure:
+        fb = f"\n# 上次运行失败\nstderr 节选：\n{prev_failure[:1000]}\n请修正后重试。\n"
     return (
         f"# 最终模型\n{model.description}\n方程：\n{chr(10).join(model.equations)}\n\n"
-        f"# 敏感性分析计划\n{desc}\n\n"
+        f"# 敏感性分析计划\n{desc}\n{fb}\n"
         f"请输出 JSON：{{\"code\": str}}。"
     )
 
