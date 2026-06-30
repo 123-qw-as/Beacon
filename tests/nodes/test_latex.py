@@ -169,6 +169,17 @@ def test_escape_remaining_underscores_in_text():
     assert out3 == r"\paragraph{w\_RF}"
 
 
+def test_escape_remaining_underscores_skips_equation_blocks():
+    """equation 块内 _ 是合法 math 语法，不能 escape。"""
+    s = "见 sensitivity_v8.png：\n\\begin{equation}\n\\hat{d}_i = \\sum_{k=1}^N d_i^{(k)}\n\\end{equation}\n后文 file_y.png"
+    out = _escape_remaining_underscores(s)
+    # equation 块内不动
+    assert r"\hat{d}_i = \sum_{k=1}^N d_i^{(k)}" in out
+    # 块外文件名 escape
+    assert "sensitivity\\_v8.png" in out
+    assert "file\\_y.png" in out
+
+
 def test_md_inline_code_preserves_normal_text():
     """没有反引号的字符串不动。"""
     s = "纯文本，无 backticks"
@@ -263,6 +274,19 @@ def test_promote_inline_equations_skips_when_no_separator():
     out = _promote_inline_equations(s)
     # 前后是中文（非空格/标点），不提升
     assert r"\begin{equation}" not in out
+
+
+def test_promote_inline_equations_eats_trailing_punctuation():
+    """公式升 equation 块后，吃掉紧邻其后的中文标点，避免下一段开头出现孤立 '。'。"""
+    s = "需求预测：$\\hat{d}_i = \\sum x_i$。净需求：$net_i = d_i - s_i$。"
+    out = _promote_inline_equations(s)
+    assert r"\begin{equation}" in out
+    # 不能出现以 '。' 开头的段落（之前的 bug）
+    for line in out.split("\n"):
+        stripped = line.strip()
+        if stripped:
+            assert not stripped.startswith("。"), f"line starts with stray 。: {line!r}"
+            assert not stripped.startswith("，"), f"line starts with stray ，: {line!r}"
 
 
 def test_md_table_to_latex_no_op_when_no_table():

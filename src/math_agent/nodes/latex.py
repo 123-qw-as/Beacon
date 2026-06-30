@@ -280,21 +280,28 @@ def _md_table_to_latex(s: str) -> str:
 
 
 def _escape_remaining_underscores(s: str) -> str:
-    r"""对 $...$ 之外残留的 `_` 做 escape。
+    r"""对 $...$ 之外、equation 块之外残留的 `_` 做 escape。
 
-    chain 末尾用：前面几步包了真数学（`D_i` → `$D_i$`），剩下的 `_` 必然出现在
-    文件名 (`sensitivity_capacity.png`) / 路径 (`attempt_0/_run.py`) / 中文中间，
+    chain 末尾用：前面几步包了真数学（`D_i` → `$D_i$` 或 \begin{equation}...），
+    剩下的 `_` 必然出现在文件名 (`sensitivity_capacity.png`) / 路径 / 中文中间，
     这些都属于 text mode，裸用会让 LaTeX 进 math mode 触发 'Missing $ inserted'。
 
     跳过 \command 后紧跟的 `_`（保留 `\paragraph{w\_RF}` 已 escape 形式）。
+    跳过 \begin{equation}...\end{equation} 块内（公式里的 _ 是合法 math 语法）。
     """
     if not s:
         return s
-    parts = s.split("$")
-    for i in range(0, len(parts), 2):
-        # 把不在 \ 后面的 _ 换成 \_
-        parts[i] = re.sub(r"(?<!\\)_", r"\_", parts[i])
-    return "$".join(parts)
+    # 先按 equation 块切分，块内不动；块外再按 $ 切分
+    parts = re.split(r"(\\begin\{equation\*?\}.*?\\end\{equation\*?\})", s, flags=re.DOTALL)
+    for i in range(len(parts)):
+        if parts[i].startswith(r"\begin{equation"):
+            continue  # 公式块内 _ 不动
+        # 块外按 $ 再切
+        segs = parts[i].split("$")
+        for j in range(0, len(segs), 2):
+            segs[j] = re.sub(r"(?<!\\)_", r"\_", segs[j])
+        parts[i] = "$".join(segs)
+    return "".join(parts)
 
 
 # 长 inline math token：含 `=` 或 `\leq` / `\geq` / `\sum` / `\prod` 且长度 >= 10
@@ -337,9 +344,15 @@ def _promote_inline_equations(s: str) -> str:
             before_ok = before == "" or before in sep_chars or before in "。，；：、"
             after_ok = after == "" or after in sep_chars or after in "。，；：、"
             if _is_long_equation(content) and before_ok and after_ok:
-                # 提升为 equation 块
+                # 提升为 equation 块；吃掉紧邻其后的中文标点（公式独占行后这些标点已冗余）
+                eat = end + 1
+                while eat < len(s) and s[eat] in "。，；：、 \t":
+                    eat += 1
+                # 同时如果跳过的字符里含 \n，保留一个换行
+                if "\n" in s[end + 1:eat] or eat < len(s) and s[eat] == "\n":
+                    pass  # 自然换行已在 equation 块两侧加了
                 out.append("\n\\begin{equation}\n" + content + "\n\\end{equation}\n")
-                i = end + 1
+                i = eat
                 continue
             # 保留 inline
             out.append(s[i:end + 1])
