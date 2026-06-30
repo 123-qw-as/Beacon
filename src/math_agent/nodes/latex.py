@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -320,11 +321,40 @@ def latex_node(state: MathModelingState) -> dict:
     # title 取 problem 第一行（避免把整段问题描述塞进 \title{}）
     title_line = state.problem.split("\n", 1)[0].strip()
 
-    tmpl = _env.get_template("paper.tex.j2")
-    tex = tmpl.render(
+    # 选模板：default 用 article 简版；gmcm 用 gmcmthesis 国赛规范
+    use_gmcm = state.latex_template == "gmcm"
+    tmpl_name = "gmcm.tex.j2" if use_gmcm else "paper.tex.j2"
+
+    render_kwargs = dict(
         problem=_latex_escape(_wrap_unicode_math(title_line)),
         paper=safe_paper, figures=safe_figures, sensitivity_runs=safe_sens,
     )
+    if use_gmcm:
+        # 队员逗号拆分到 a/b/c，空位补占位
+        mem = (state.members or "").split(",")
+        mem = [m.strip() for m in mem] + ["", "", ""]
+        render_kwargs.update(
+            school=state.school,
+            team_id=state.team_id,
+            member_a=mem[0] or None,
+            member_b=mem[1] or None,
+            member_c=mem[2] or None,
+            keywords="数学建模, 多智能体, 优化",  # writer 未生成关键词；后续 plan 可加
+            code_artifacts=[a for a in state.code_artifacts if a.success],
+        )
+        # cls 必须和 .tex 在同一目录才能被 xelatex 找到；封面图也要带上
+        cls_src = _TEMPLATE_DIR / "gmcmthesis.cls"
+        cls_dst = workdir / "gmcmthesis.cls"
+        shutil.copyfile(cls_src, cls_dst)
+        fig_src = _TEMPLATE_DIR / "gmcm_figures"
+        fig_dst = workdir / "figures"
+        if fig_src.is_dir():
+            fig_dst.mkdir(parents=True, exist_ok=True)
+            for f in fig_src.iterdir():
+                shutil.copyfile(f, fig_dst / f.name)
+
+    tmpl = _env.get_template(tmpl_name)
+    tex = tmpl.render(**render_kwargs)
     tex_path = workdir / "paper.tex"
     tex_path.write_text(tex, encoding="utf-8")
 

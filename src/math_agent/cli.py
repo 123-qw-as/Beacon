@@ -33,6 +33,10 @@ def run(
     out: Path = typer.Option(Path("runs/latest")),
     thread: str = typer.Option("default"),
     no_interrupt: bool = typer.Option(False, help="跳过 HITL，直接跑到底"),
+    template: str = typer.Option("default", help="LaTeX 模板：default | gmcm（国赛 gmcmthesis）"),
+    school: str = typer.Option("", help="学校名称（gmcm 模板用）"),
+    team_id: str = typer.Option("", help="参赛报名号（gmcm 模板用）"),
+    members: str = typer.Option("", help="队员名字，逗号分隔：'张三,李四,王五'（gmcm 模板用）"),
 ):
     spec = json.loads(problem.read_text(encoding="utf-8"))
     interrupt = [] if no_interrupt else ["human_review"]
@@ -44,6 +48,10 @@ def run(
         "stage_target": "basic",
         "iteration": 0,
         "output_dir": str(out),
+        "latex_template": template,
+        "school": school or None,
+        "team_id": team_id or None,
+        "members": members or None,
     }
     with _saver_cm(out) as saver:
         g = build_graph(checkpointer=saver, interrupt_before=interrupt)
