@@ -51,3 +51,21 @@ def test_runner_accepts_relative_workdir(tmp_path, monkeypatch):
     res = run_python("print('relpath_ok')", workdir=rel)
     assert res.success, f"stderr={res.stderr!r}"
     assert "relpath_ok" in res.stdout
+
+
+def test_runner_result_carries_error_kind_on_timeout(workdir):
+    res = run_python("import time; time.sleep(30)", workdir=workdir, timeout=1)
+    assert not res.success
+    assert res.error_kind == "timeout"
+
+
+def test_runner_result_carries_error_kind_on_runtime(workdir):
+    res = run_python("raise ValueError('x')", workdir=workdir)
+    assert not res.success
+    assert res.error_kind == "runtime"
+
+
+def test_runner_result_error_kind_empty_on_success(workdir):
+    res = run_python("print('hi')", workdir=workdir)
+    assert res.success
+    assert res.error_kind == ""

@@ -23,6 +23,7 @@ class RunResult:
     stdout: str = ""
     stderr: str = ""
     artifact_paths: list[str] = field(default_factory=list)
+    error_kind: str = ""  # "" | "timeout" | "runtime"
 
 
 def _minimal_env() -> dict[str, str]:
@@ -55,7 +56,12 @@ def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
             env=_minimal_env(),
         )
     except subprocess.TimeoutExpired as e:
-        return RunResult(success=False, stdout=e.stdout or "", stderr=f"timeout after {timeout}s")
+        return RunResult(
+            success=False,
+            stdout=e.stdout or "",
+            stderr=f"timeout after {timeout}s",
+            error_kind="timeout",
+        )
 
     after = {p.name for p in workdir.iterdir()}
     new_files = sorted(after - before - {"_run.py"})
@@ -64,4 +70,5 @@ def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
         stdout=proc.stdout or "",
         stderr=proc.stderr or "",
         artifact_paths=[str(workdir / n) for n in new_files],
+        error_kind="" if proc.returncode == 0 else "runtime",
     )
