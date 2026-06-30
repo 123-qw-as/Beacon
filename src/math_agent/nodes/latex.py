@@ -122,11 +122,15 @@ _BACKTICK_RE = re.compile(r"`([^`\n]+?)`")
 # unicode 数学字符（_UNICODE_MATH_MAP 的 key），用于 _NAKED_SUB_RE 的 ident 起头集
 _UNICODE_MATH_CHARS = "".join(_UNICODE_MATH_MAP.keys())
 # 裸 LaTeX 下标/上标：[字母 or unicode 数学符][后续字母数字]*([_^](identifier|{...}))+
-# 例：D_i / c_{ij} / λ_i^net / γ_{ij}；前面不接 \（命令名）或 $（已在 math 内）
+# 例：D_i / c_{ij} / λ_i^net / γ_{ij}
+# 排除：
+#   (?<![\\$\w]) 前面不是 \（命令名）/ $（math 内）/ 单词字符（避免中段切）
+#   (?![\w.]) 后面不是单词字符或点：防止 v8 实测的 'sensitivity_capacity.png' 误判
 _NAKED_SUB_RE = re.compile(
-    r"(?<![\\$])"
+    r"(?<![\\$\w])"
     r"([A-Za-z" + re.escape(_UNICODE_MATH_CHARS) + r"][A-Za-z0-9]*"
     r"(?:[_^](?:\{[^}]+\}|[A-Za-z0-9]+))+)"
+    r"(?![\w./])"
 )
 
 
@@ -275,17 +279,36 @@ def _md_table_to_latex(s: str) -> str:
     return "\n".join(out)
 
 
+def _escape_remaining_underscores(s: str) -> str:
+    r"""对 $...$ 之外残留的 `_` 做 escape。
+
+    chain 末尾用：前面几步包了真数学（`D_i` → `$D_i$`），剩下的 `_` 必然出现在
+    文件名 (`sensitivity_capacity.png`) / 路径 (`attempt_0/_run.py`) / 中文中间，
+    这些都属于 text mode，裸用会让 LaTeX 进 math mode 触发 'Missing $ inserted'。
+
+    跳过 \command 后紧跟的 `_`（保留 `\paragraph{w\_RF}` 已 escape 形式）。
+    """
+    if not s:
+        return s
+    parts = s.split("$")
+    for i in range(0, len(parts), 2):
+        # 把不在 \ 后面的 _ 换成 \_
+        parts[i] = re.sub(r"(?<!\\)_", r"\_", parts[i])
+    return "$".join(parts)
+
+
 def _prepare_section(s: str) -> str:
     """paper 段渲染前预处理：链式确定性转换，全部跳过已有 $...$。
 
     顺序敏感：
     1. markdown 表格 → tabular（在 inline code/heading 之前；表格里可能有 backtick 数学）
-    2. markdown 标题 `### xxx` → `\\subsubsection*{xxx}`
+    2. markdown 标题 `### xxx` → `\\subsubsection{xxx}`
     3. markdown 加粗 `**x**` → `\\textbf{x}`
     4. markdown 列表 `- x` → itemize
     5. markdown 反引号 `` `S_i` `` → `$S_i$`（内容里 unicode 同步展开）
     6. 裸 LaTeX 下标 `D_i` → `$D_i$`（writer 漏的兜底）
     7. unicode 数学符号 α → `$\\alpha$`（在 $...$ 之外的）
+    8. 残留的裸 `_` → `\\_`（文件名/路径里的 `_` 必须 escape，否则 text mode 进 math）
 
     **不调 _latex_escape**——writer 在 paper 段会故意写 LaTeX inline math。
     """
@@ -296,6 +319,7 @@ def _prepare_section(s: str) -> str:
     s = _md_inline_code_to_math(s)
     s = _wrap_naked_subscripts(s)
     s = _wrap_unicode_math(s)
+    s = _escape_remaining_underscores(s)
     return s
 
 
@@ -304,7 +328,9 @@ def latex_node(state: MathModelingState) -> dict:
     workdir.mkdir(parents=True, exist_ok=True)
 
     # ponytail: 为图重打一份 LaTeX 安全视图，避免 caption/path 里的 _/&/% 炸编译
-    # caption 限到约 55 字（包含完整结尾标点），analysis 给完整版用作正文段
+    # caption 限到约 55 字（包含完整结尾标点）
+    # analysis 走完整 _prepare_section（v8 实测：figure_pipeline LLM 在图说里
+    # 会写 sensitivity_capacity.png 这种文件名，必须 escape）
     safe_figures = [
         FigureArtifact(
             path=_latex_path(f.path),
@@ -312,7 +338,7 @@ def latex_node(state: MathModelingState) -> dict:
             caption=_latex_escape((f.caption or f.purpose)[:55]),
             quality_score=f.quality_score,
             quality_issues=list(f.quality_issues),
-            analysis=_latex_escape(f.analysis),
+            analysis=_prepare_section(f.analysis),
         )
         for f in state.figures
     ]

@@ -2,6 +2,7 @@ from math_agent.state import MathModelingState, PaperSections
 from math_agent.nodes.latex import (
     latex_node, _wrap_unicode_math, _md_headings_to_latex, _md_inline_code_to_math,
     _wrap_naked_subscripts, _md_bold_to_latex, _md_bullets_to_latex, _md_table_to_latex,
+    _escape_remaining_underscores,
 )
 
 
@@ -142,6 +143,30 @@ def test_wrap_naked_subscripts_handles_unicode_ident_head():
     assert r"$\gamma_{ij}$" in out
     assert "λ_i^net" not in out
     assert "γ_{ij}" not in out
+
+
+def test_wrap_naked_subscripts_skips_filenames_and_paths():
+    """v8 实测：sensitivity_capacity.png / attempt_0/_run.py 这类文件名/路径不能误包。"""
+    s = "图（sensitivity_capacity.png）参考 attempt_0/_run.py 与变量 D_i"
+    out = _wrap_naked_subscripts(s)
+    # 文件名/路径保持原样
+    assert "sensitivity_capacity.png" in out
+    assert "attempt_0/_run.py" in out
+    # 真实数学仍包
+    assert "$D_i$" in out
+
+
+def test_escape_remaining_underscores_in_text():
+    """$...$ 外残留的 _ 必须 escape，否则 LaTeX text mode 报 Missing $."""
+    out = _escape_remaining_underscores("图（sensitivity_capacity.png）显示")
+    assert "sensitivity\\_capacity.png" in out
+    # $...$ 内不动
+    out2 = _escape_remaining_underscores("$D_i$ 与 sensitivity_x.png")
+    assert "$D_i$" in out2
+    assert "sensitivity\\_x.png" in out2
+    # 已 escape 的 \_ 不二次 escape
+    out3 = _escape_remaining_underscores(r"\paragraph{w\_RF}")
+    assert out3 == r"\paragraph{w\_RF}"
 
 
 def test_md_inline_code_preserves_normal_text():
