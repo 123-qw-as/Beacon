@@ -135,6 +135,15 @@ def test_wrap_naked_subscripts_skips_command_args():
     assert out == s  # 不动
 
 
+def test_wrap_naked_subscripts_handles_unicode_ident_head():
+    """λ_i^net、γ_{ij} 这种 unicode 起头 + 下标也要整体包，并展开 unicode。"""
+    out = _wrap_naked_subscripts("参数 λ_i^net 与 γ_{ij}")
+    assert r"$\lambda_i^net$" in out
+    assert r"$\gamma_{ij}$" in out
+    assert "λ_i^net" not in out
+    assert "γ_{ij}" not in out
+
+
 def test_md_inline_code_preserves_normal_text():
     """没有反引号的字符串不动。"""
     s = "纯文本，无 backticks"

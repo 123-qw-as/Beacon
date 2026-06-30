@@ -118,11 +118,13 @@ def _md_headings_to_latex(s: str) -> str:
 
 
 _BACKTICK_RE = re.compile(r"`([^`\n]+?)`")
-# 裸 LaTeX 下标/上标：[字母][后续字母数字]*([_^](identifier|{...}))+
-# 例：D_i / c_{ij} / S_i^{(1)} / x_t^k；前面不接 \（命令名）或 $（已在 math 内）
+# unicode 数学字符（_UNICODE_MATH_MAP 的 key），用于 _NAKED_SUB_RE 的 ident 起头集
+_UNICODE_MATH_CHARS = "".join(_UNICODE_MATH_MAP.keys())
+# 裸 LaTeX 下标/上标：[字母 or unicode 数学符][后续字母数字]*([_^](identifier|{...}))+
+# 例：D_i / c_{ij} / λ_i^net / γ_{ij}；前面不接 \（命令名）或 $（已在 math 内）
 _NAKED_SUB_RE = re.compile(
     r"(?<![\\$])"
-    r"([A-Za-z][A-Za-z0-9]*"
+    r"([A-Za-z" + re.escape(_UNICODE_MATH_CHARS) + r"][A-Za-z0-9]*"
     r"(?:[_^](?:\{[^}]+\}|[A-Za-z0-9]+))+)"
 )
 
@@ -151,17 +153,26 @@ def _md_inline_code_to_math(s: str) -> str:
 def _wrap_naked_subscripts(s: str) -> str:
     """把行内裸的 LaTeX 下标/上标自动包成 $...$。
 
-    覆盖 writer RULE 4 没治住的 `D_i`、`c_{ij}`、`S_i^{(1)}`。
+    覆盖 writer RULE 4 没治住的 `D_i`、`c_{ij}`、`S_i^{(1)}`、`λ_i^net`。
     跳过已在 $...$ 内、跳过 \\command 前缀（避免动 \\paragraph{w\\_RF}）。
+    若 token 内含 unicode 数学字符（λ/σ 等），同步展开为 LaTeX 命令。
 
     已知 over-wrap 风险：`a_b_c` 这种合法变量名也会被当数学。但 paper 段里
     几乎不会出现，且即便错伤，渲出来仍是合法 LaTeX（math italic 显示）。
     """
     if not s:
         return s
+
+    def _sub(m: re.Match) -> str:
+        content = m.group(1)
+        for ch, cmd in _UNICODE_MATH_MAP.items():
+            if ch in content:
+                content = content.replace(ch, cmd)
+        return f"${content}$"
+
     parts = s.split("$")
     for i in range(0, len(parts), 2):
-        parts[i] = _NAKED_SUB_RE.sub(r"$\1$", parts[i])
+        parts[i] = _NAKED_SUB_RE.sub(_sub, parts[i])
     return "$".join(parts)
 
 
