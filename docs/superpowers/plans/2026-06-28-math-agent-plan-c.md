@@ -11,11 +11,11 @@
 - **追踪**：通过 `litellm` 的 callback + LangGraph 的 `on_node` 钩子写一份 JSON 运行报告到 `runs/<thread>/trace.json`。LangSmith / OTel 作为可选 callback，仅当环境变量存在时启用。
 
 **Tech Stack:**（在 Plan A/B 的基础上新增）
-- `tenacity>=8.2`（统一重试 + 指数退避）
-- `sqlite-vec>=0.1`（轻量向量索引；无须 docker）
+- `tenacity>=8.2,<9`（统一重试 + 指数退避）
+- `sqlite-vec>=0.1,<0.2`（轻量向量索引；无须 docker；0.1.x API 仍在变化，pin 主版本避免 CI 飘）
 - `litellm.embedding` / `litellm.callbacks`（复用既有 LiteLLM；不引入 openai/anthropic SDK）
-- `pypdf>=4.0`（PDF 文本抽取，RAG ingest 用）
-- `rich>=13.7`（CLI 报告美化）
+- `pypdf>=4.0,<5`（PDF 文本抽取，RAG ingest 用）
+- `rich>=13.7,<14`（CLI 报告美化）
 - 可选：`langsmith`、`opentelemetry-sdk`（仅在对应环境变量存在时启用）
 
 > **前置条件**：Plan A、Plan B 已完成且 `pytest -q` 全绿。Plan C 不改变已落地节点的 *外部行为*，只在 LLM 调用边界、prompt 拼装、运行端做增强。
@@ -44,8 +44,7 @@ src/math_agent/
 │   │   ├── 2022_A.json
 │   │   └── 2023_B.json
 │   ├── expectations.json           # 每题的期望评分区间与必含关键词
-│   ├── runner.py                   # run_bench(mode='mock'|'live') -> BenchReport
-│   └── fixtures.py                 # mock 模式下每题用的固定 LLM 输出
+│   └── runner.py                   # run_bench(out_dir) -> BenchReport（live：真跑 graph）
 └── prompts/
     ├── analyst.py                  # 修改：build_prompt 接受 retrieved_context
     ├── modeler.py                  # 修改：同上
@@ -62,6 +61,7 @@ tests/
 │   ├── test_retrieve.py
 │   └── test_ingest.py
 └── bench/
+    ├── conftest.py                 # bench mock harness（ExitStack + unittest.mock）
     └── test_runner_mock.py
 docs/
 └── plan-c-runbook.md               # 运行手册（含 RAG ingest、bench、trace 解读）
@@ -91,7 +91,7 @@ docs/
 import pytest
 from math_agent.errors import (
     MathAgentError, LLMError, LLMRateLimitError, LLMValidationError,
-    SandboxError, SandboxTimeoutError, SandboxRuntimeError,
+    RunnerError, RunnerTimeoutError, RunnerRuntimeError,
     LatexError, LatexMissingBinaryError, LatexCompileError,
     classify_exception,
 )
@@ -101,7 +101,8 @@ def test_class_hierarchy():
     assert issubclass(LLMRateLimitError, LLMError)
     assert issubclass(LLMValidationError, LLMError)
     assert issubclass(LLMError, MathAgentError)
-    assert issubclass(SandboxTimeoutError, SandboxError)
+    assert issubclass(RunnerTimeoutError, RunnerError)
+    assert issubclass(RunnerRuntimeError, RunnerError)
     assert issubclass(LatexMissingBinaryError, LatexError)
 
 
@@ -141,12 +142,15 @@ Expected: ImportError.
     │     ├── LLMRateLimitError       # 触发指数退避
     │     ├── LLMValidationError      # 结构化输出解析失败；可"喂回错误"重试
     │     └── LLMTransportError       # 网络/超时；短间隔重试
-    ├── SandboxError
-    │     ├── SandboxTimeoutError
-    │     └── SandboxRuntimeError
+    ├── RunnerError                   # 对应 tools/runner.py 的 subprocess 执行错误
+    │     ├── RunnerTimeoutError
+    │     └── RunnerRuntimeError
     └── LatexError
           ├── LatexMissingBinaryError # 不应重试
           └── LatexCompileError       # 可解析 .log 给出建议
+
+命名约定：与 `tools/runner.py`（Plan A 已重命名）保持一致——所有错误类、结果字段、
+fixture 都用 `Runner*` 前缀，不再使用历史名 `Sandbox*`。
 
 分类原则：依据**重试策略不同**才单独建类；同策略归一类。
 """
@@ -173,15 +177,15 @@ class LLMTransportError(LLMError):
     pass
 
 
-class SandboxError(MathAgentError):
+class RunnerError(MathAgentError):
     pass
 
 
-class SandboxTimeoutError(SandboxError):
+class RunnerTimeoutError(RunnerError):
     pass
 
 
-class SandboxRuntimeError(SandboxError):
+class RunnerRuntimeError(RunnerError):
     pass
 
 
@@ -247,7 +251,7 @@ import pytest
 from math_agent.errors import (
     LLMRateLimitError, LLMTransportError, LLMValidationError, LatexMissingBinaryError,
 )
-from math_agent.retry import llm_retry, sandbox_retry
+from math_agent.retry import llm_retry, runner_retry
 
 
 def test_llm_retry_retries_rate_limit_then_succeeds():
@@ -286,12 +290,12 @@ def test_llm_retry_gives_up_after_max():
         f()
 
 
-def test_sandbox_retry_does_not_retry_missing_binary():
-    @sandbox_retry(max_attempts=3, base_delay=0)
+def test_runner_retry_does_not_retry_missing_binary():
+    @runner_retry(max_attempts=3, base_delay=0)
     def f():
         raise LatexMissingBinaryError("no xelatex")  # 仅作为"不可重试"信号示意
 
-    # sandbox_retry 只重试 SandboxError；其他错误透传，不重试
+    # runner_retry 只重试 RunnerError；其他错误透传，不重试
     with pytest.raises(LatexMissingBinaryError):
         f()
 ```
@@ -310,10 +314,11 @@ Expected: ImportError.
 - 只有 *可重试* 的错误才重试；其他错误透传，让调用方/上游处理。
 - 不在装饰器内做 sleep；用 tenacity 的 wait_exponential。
 - 装饰器是同步版本；如未来引入 async，再扩 async_llm_retry。
+- max_attempts 默认从 config 读，避免与 Plan A 的 MAX_LLM_RETRIES 漂移；调用方可显式覆盖。
 
 可重试集合：
 - llm_retry: LLMRateLimitError, LLMTransportError
-- sandbox_retry: SandboxError 的全部子类
+- runner_retry: RunnerError 的全部子类
 """
 from __future__ import annotations
 
@@ -322,29 +327,37 @@ from tenacity import (
 )
 
 from math_agent.errors import (
-    LLMRateLimitError, LLMTransportError, SandboxError,
+    LLMRateLimitError, LLMTransportError, RunnerError,
 )
 
 
-def llm_retry(*, max_attempts: int = 4, base_delay: float = 1.0, max_delay: float = 30.0):
+def _default_llm_attempts() -> int:
+    # 与 Plan A 的 MAX_LLM_RETRIES 保持同源；MAX_LLM_RETRIES 是"次数"语义（首次 + N 次重试），
+    # tenacity 的 stop_after_attempt 是"总尝试次数"语义，故 attempts = MAX_LLM_RETRIES + 1。
+    from math_agent.config import MAX_LLM_RETRIES
+    return MAX_LLM_RETRIES + 1
+
+
+def llm_retry(*, max_attempts: int | None = None, base_delay: float = 1.0, max_delay: float = 30.0):
+    attempts = max_attempts if max_attempts is not None else _default_llm_attempts()
     return retry(
         retry=retry_if_exception_type((LLMRateLimitError, LLMTransportError)),
-        stop=stop_after_attempt(max_attempts),
+        stop=stop_after_attempt(attempts),
         wait=wait_exponential(multiplier=base_delay, min=base_delay, max=max_delay),
         reraise=True,
     )
 
 
-def sandbox_retry(*, max_attempts: int = 2, base_delay: float = 0.5):
+def runner_retry(*, max_attempts: int = 2, base_delay: float = 0.5):
     return retry(
-        retry=retry_if_exception_type(SandboxError),
+        retry=retry_if_exception_type(RunnerError),
         stop=stop_after_attempt(max_attempts),
         wait=wait_exponential(multiplier=base_delay, min=base_delay, max=5.0),
         reraise=True,
     )
 ```
 
-- [ ] **Step 4：在 `pyproject.toml` 的 dependencies 中加 `"tenacity>=8.2"`**
+- [ ] **Step 4：在 `pyproject.toml` 的 dependencies 中加 `"tenacity>=8.2,<9"`**
 
 执行：
 
@@ -361,7 +374,7 @@ Expected: 4 passed.
 
 ```bash
 git add src/math_agent/retry.py tests/test_retry.py pyproject.toml
-git commit -m "feat: tenacity-based retry decorators (llm_retry, sandbox_retry)"
+git commit -m "feat: tenacity-based retry decorators (llm_retry, runner_retry)"
 ```
 
 ---
@@ -439,18 +452,15 @@ def _do_completion(**kw):
 
 
 def _completion_with_retry(*, _retry_attempts=None, _retry_base_delay=1.0, **kw):
-    # Plan B 已在 config.py 里定义 MAX_LLM_RETRIES（默认 2，单次 LLM 调用的结构化解析重试）；
-    # 这里默认从 config 读，调用方可显式传 _retry_attempts 覆盖（仅测试用）。
-    from math_agent.config import MAX_LLM_RETRIES
-    attempts = _retry_attempts if _retry_attempts is not None else MAX_LLM_RETRIES + 2
-
-    @llm_retry(max_attempts=attempts, base_delay=_retry_base_delay)
+    # llm_retry 默认从 config.MAX_LLM_RETRIES 派生 attempts；
+    # 调用方（如测试）可显式传 _retry_attempts 覆盖。
+    @llm_retry(max_attempts=_retry_attempts, base_delay=_retry_base_delay)
     def _call():
         return _do_completion(**kw)
     return _call()
 ```
 
-同时把签名上加上 `_retry_attempts: int | None = None, _retry_base_delay: float = 1.0,`，并把 `_completion_with_retry(...)` 调用处传入这两个参数。**默认值改为 None 让 retry 从 config 读，避免与 Plan B 已落地的 `MAX_LLM_RETRIES` 漂移**。
+同时把签名上加上 `_retry_attempts: int | None = None, _retry_base_delay: float = 1.0,`，并把 `_completion_with_retry(...)` 调用处传入这两个参数。**`_retry_attempts=None` 让 `llm_retry` 从 `config.MAX_LLM_RETRIES` 派生 attempts，避免重试预算两处定义漂移。**
 
 把 schema 解析失败的分支由 `last_err = e; continue` 改为：
 
@@ -494,17 +504,17 @@ git commit -m "feat(llm): classify exceptions + tenacity retry for rate limit/tr
 - [ ] **Step 1：在 `tests/test_runner.py` 追加分类测试**
 
 ```python
-from math_agent.errors import SandboxTimeoutError, SandboxRuntimeError
+from math_agent.errors import RunnerTimeoutError, RunnerRuntimeError
 
 
-def test_sandbox_result_carries_error_kind_on_timeout(workdir):
+def test_runner_result_carries_error_kind_on_timeout(workdir):
     from math_agent.tools.runner import run_python
     res = run_python("import time; time.sleep(30)", workdir=workdir, timeout=1)
     assert not res.success
     assert res.error_kind == "timeout"
 
 
-def test_sandbox_result_carries_error_kind_on_runtime(workdir):
+def test_runner_result_carries_error_kind_on_runtime(workdir):
     from math_agent.tools.runner import run_python
     res = run_python("raise ValueError('x')", workdir=workdir)
     assert not res.success
@@ -518,11 +528,11 @@ Expected: 两个新用例 FAIL（缺 `error_kind`）。
 
 - [ ] **Step 3：修改 `runner.py`**
 
-把 `SandboxResult` 改为：
+把 `RunResult`（Plan A 已落地的类名）扩字段：
 
 ```python
 @dataclass
-class SandboxResult:
+class RunResult:
     success: bool
     stdout: str = ""
     stderr: str = ""
@@ -534,13 +544,13 @@ class SandboxResult:
 
 ```python
     except subprocess.TimeoutExpired as e:
-        return SandboxResult(
+        return RunResult(
             success=False, stdout=e.stdout or "",
             stderr=f"timeout after {timeout}s", error_kind="timeout",
         )
 
     ...
-    return SandboxResult(
+    return RunResult(
         success=proc.returncode == 0,
         stdout=proc.stdout, stderr=proc.stderr,
         artifact_paths=[str(workdir / n) for n in new_files],
@@ -877,7 +887,7 @@ def test_store_rejects_dim_mismatch(workdir):
 Run: `pytest tests/rag/test_store.py -v`
 Expected: ImportError.
 
-- [ ] **Step 3：在 `pyproject.toml` 加 `"sqlite-vec>=0.1"`**，并 `pip install -e ".[dev]"`。
+- [ ] **Step 3：在 `pyproject.toml` 加 `"sqlite-vec>=0.1,<0.2"`**，并 `pip install -e ".[dev]"`。
 
 - [ ] **Step 4：实现 `store.py`**
 
@@ -1155,7 +1165,7 @@ def test_ingest_directory_handles_pdf_via_pypdf(mocker, workdir):
 Run: `pytest tests/rag/test_ingest.py -v`
 Expected: ImportError.
 
-- [ ] **Step 3：在 `pyproject.toml` 加 `"pypdf>=4.0"`，安装。**
+- [ ] **Step 3：在 `pyproject.toml` 加 `"pypdf>=4.0,<5"`，安装。**
 
 - [ ] **Step 4：实现 `ingest.py`**
 
@@ -1320,7 +1330,17 @@ def analyst_node(state: MathModelingState) -> dict:
     ...
 ```
 
-`modeler_node` 用 `latest_model().description + " " + state.problem` 作为查询；`writer_node` 用 `state.problem + state.paper.model_section[:500]` 作为查询。
+`modeler_node` 与 `writer_node` 同形扩展。**查询字符串构造**（注意 `basic` 阶段 `latest_model()` 为 None）：
+
+```python
+# modeler_node：
+prev = state.latest_model()
+prev_desc = prev.description if prev else ""
+query = (state.problem + " " + state.stage_target + " " + prev_desc).strip()
+
+# writer_node：
+query = state.problem + " " + (state.paper.model_section or "")[:500]
+```
 
 - [ ] **Step 4：补测试，验证 RAG 关闭时行为不变 + 打开时查询被调用**
 
@@ -1367,6 +1387,12 @@ git commit -m "feat(rag): inject retrieved context into analyst/modeler/writer p
 ---
 
 ## Phase 3：历年题回归基准
+
+> **架构约束**：bench 的 mock fixture **不**进 `src/math_agent/bench/`，避免生产代码 import
+> `unittest.mock`。结构：
+> - `src/math_agent/bench/`：仅放数据（题目 JSON、expectations.json）+ 纯 runner（live 模式真跑）
+> - `tests/bench/`：放 mock fixture + mock 模式测试
+> - CLI `bench` 子命令调 `run_bench(mode="live", ...)`；要测 mock 模式跑 `pytest tests/bench/`
 
 ### Task 3.1：bench 数据与期望
 
@@ -1439,62 +1465,80 @@ git commit -m "feat(bench): seed two historical problems and expectations"
 
 ---
 
-### Task 3.2：bench runner（先写测试，mock 模式）
+### Task 3.2：bench runner（live 模式真跑器）+ 测试侧 mock harness
 
 **Files:**
-- Create: `tests/bench/test_runner_mock.py`
-- Create: `src/math_agent/bench/fixtures.py`
-- Create: `src/math_agent/bench/runner.py`
+- Create: `src/math_agent/bench/runner.py`           # 纯 live：调 build_graph 真跑、判定通过
+- Create: `tests/bench/conftest.py`                  # mock harness（ExitStack + unittest.mock.patch）
+- Create: `tests/bench/test_runner_mock.py`          # 用 mock harness 验证 runner 判定逻辑
+
+> bench 的 mock fixture 与 `from PIL/unittest.mock import` 这类只在测试时需要的依赖都在
+> `tests/bench/` 下，**不**污染 `src/math_agent/bench/`。
 
 - [ ] **Step 1：写失败的测试**
 
+`tests/bench/test_runner_mock.py`：
+
 ```python
+import json
 from math_agent.bench.runner import run_bench, BenchReport, BenchCase
 
 
-def test_run_bench_mock_returns_one_case_per_problem(workdir):
-    rep = run_bench(mode="mock", out_dir=workdir)
+def test_run_bench_returns_one_case_per_problem(workdir, install_bench_mocks):
+    """install_bench_mocks 是 conftest.py 里的 fixture，进入测试时自动 patch 各节点 complete。"""
+    rep = run_bench(out_dir=workdir)
     assert isinstance(rep, BenchReport)
     assert {c.problem_id for c in rep.cases} == {"2022_A", "2023_B"}
 
 
-def test_run_bench_mock_marks_pass_when_expectation_met(workdir):
-    rep = run_bench(mode="mock", out_dir=workdir)
+def test_run_bench_marks_pass_when_expectation_met(workdir, install_bench_mocks):
+    """install_bench_mocks 的默认 fixture 配置成"勉强达标"，所有题应 PASS。"""
+    rep = run_bench(out_dir=workdir)
     for case in rep.cases:
-        assert isinstance(case, BenchCase)
-        # mock fixtures 已经设计为达标
-        assert case.passed, f"{case.problem_id} expected to pass: {case.failures}"
+        assert case.passed, f"{case.problem_id}: {case.failures}"
 
 
-def test_run_bench_writes_report_json(workdir):
-    run_bench(mode="mock", out_dir=workdir)
-    rep_path = workdir / "bench_report.json"
-    assert rep_path.exists()
-    import json
-    blob = json.loads(rep_path.read_text(encoding="utf-8"))
+def test_run_bench_marks_fail_when_keyword_missing(workdir, install_bench_mocks_missing_keyword):
+    """另一份 fixture 把 mock paper 的 keyword 抠掉，应导致 FAIL。"""
+    rep = run_bench(out_dir=workdir)
+    fails = [c for c in rep.cases if not c.passed]
+    assert fails, "expected at least one FAIL when keyword missing"
+    assert any("missing keyword" in " ".join(c.failures) for c in fails)
+
+
+def test_run_bench_marks_fail_when_overall_below_threshold(workdir, install_bench_mocks_low_overall):
+    """另一份 fixture 让 evaluation overall=3.0，远低于 min_overall=6.5，应导致 FAIL。"""
+    rep = run_bench(out_dir=workdir)
+    fails = [c for c in rep.cases if not c.passed]
+    assert fails
+    assert any("overall" in " ".join(c.failures) for c in fails)
+
+
+def test_run_bench_writes_report_json(workdir, install_bench_mocks):
+    run_bench(out_dir=workdir)
+    blob = json.loads((workdir / "bench_report.json").read_text(encoding="utf-8"))
     assert "cases" in blob and len(blob["cases"]) == 2
 ```
 
-- [ ] **Step 2：跑测试，确认失败**
-
-Run: `pytest tests/bench/test_runner_mock.py -v`
-Expected: ImportError.
-
-- [ ] **Step 3：实现 `fixtures.py`（mock 模式下所有 LLM 输出的固定夹具）**
+- [ ] **Step 2：写 `tests/bench/conftest.py`（mock harness）**
 
 ```python
-"""bench mock 模式下每题用的固定输出。
+"""bench mock harness：把 LLM/LaTeX 全部 mock 掉，runner 跑结构性流程。
 
-每条 fixture 直接是节点级 mock 返回值，避免 LLM 调用。
+放在 tests/ 下，避免 src/math_agent/bench/runner.py import unittest.mock。
 """
 from __future__ import annotations
 
-from PIL import Image
+from contextlib import ExitStack
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from PIL import Image
 
 from math_agent.state import (
     Assumption, ModelVersion, CriticReport, PaperSections,
-    SensitivityRun, EvaluationReport, HumanDecision,
+    EvaluationReport, HumanDecision,
 )
 from math_agent.nodes.analyst import AnalystOutput
 from math_agent.nodes.coder import CoderDraft
@@ -1502,7 +1546,13 @@ from math_agent.nodes.figure_pipeline import FigureCriticOut, FigureAnalysisOut
 from math_agent.nodes.sensitivity import SensitivityPlan, SensitivityCode, Interpretations
 
 
-def make_paper(keywords: list[str]) -> PaperSections:
+def _make_png(p: Path):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (320, 240), "white").save(p)
+    return str(p)
+
+
+def _make_paper(keywords: list[str]) -> PaperSections:
     kw = "、".join(keywords)
     body = f"本研究围绕 {kw} 展开，模型经过 basic→improved→final 演化。" * 5
     return PaperSections(
@@ -1512,214 +1562,11 @@ def make_paper(keywords: list[str]) -> PaperSections:
     )
 
 
-def make_png(p: Path):
-    p.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (320, 240), "white").save(p)
-    return str(p)
-```
-
-- [ ] **Step 4：实现 `runner.py`**
-
-```python
-"""回归基准 runner。
-
-mode='mock'：mock 掉所有 LLM 与 LaTeX 编译，确保流水线本身可跑通 + 结构化产出符合预期。
-mode='live'：真调 LLM，慢且贵；本计划不在 CI 中跑。
-
-判定每题"通过"的条件（来自 expectations.json）：
-- overall ≥ min_overall
-- paper 文本中包含所有 must_contain_keywords
-- 若 must_have_sensitivity，则 sensitivity_runs 非空
-- 若 must_have_figures，则 figures 非空
-"""
-from __future__ import annotations
-
-import json
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
-
-from math_agent.bench.fixtures import (
-    make_paper, make_png, Assumption, ModelVersion, CriticReport,
-    SensitivityPlan, SensitivityCode, Interpretations,
-    FigureCriticOut, FigureAnalysisOut, CoderDraft,
-    EvaluationReport, HumanDecision,
-)
-from math_agent.graph import build_graph
-
-
-_BENCH_ROOT = Path(__file__).resolve().parent
-_PROBLEMS_DIR = _BENCH_ROOT / "problems"
-_EXPECTATIONS = _BENCH_ROOT / "expectations.json"
-
-
-@dataclass
-class BenchCase:
-    problem_id: str
-    overall: float
-    passed: bool
-    failures: list[str] = field(default_factory=list)
-
-
-@dataclass
-class BenchReport:
-    mode: str
-    cases: list[BenchCase]
-
-
-def _install_mocks(mocker, workdir: Path, keywords: list[str]):
-    """与 plan-b 的端到端 smoke 类似，但参数化 keywords。"""
-    fig_path = make_png(workdir / "code" / "fig.png")
+def _patch_all_nodes(stack: ExitStack, workdir: Path, paper_factory):
+    """注入所有节点的 mock；paper_factory(keywords) 返回 PaperSections。"""
+    fig_path = _make_png(workdir / "code" / "fig.png")
     sens_png = workdir / "sensitivity" / "p1.png"
-    sens_png.parent.mkdir(parents=True, exist_ok=True)
-    make_png(sens_png)
-
-    mocker.patch("math_agent.nodes.analyst.complete",
-                 return_value=AnalystOutput(assumptions=[
-                     Assumption(statement="A", rationale="r", sensitivity_relevant=True)]))
-
-    stage_iter = iter(["basic", "improved", "final"])
-    mocker.patch("math_agent.nodes.modeler.complete",
-                 side_effect=lambda *a, **k: ModelVersion(
-                     stage=next(stage_iter), description="d"*200))
-    mocker.patch("math_agent.nodes.model_critic.complete",
-                 return_value=CriticReport(target="modeler", score=9, approved=True))
-    code = (
-        "from pathlib import Path\n"
-        f"Path(r'{fig_path}').parent.mkdir(parents=True, exist_ok=True)\n"
-        "print('done')\n"
-    )
-    mocker.patch("math_agent.nodes.coder.complete",
-                 return_value=CoderDraft(purpose="主结果", code=code))
-
-    mocker.patch("math_agent.nodes.sensitivity.complete", side_effect=[
-        SensitivityPlan(runs=[{"parameter": "p1", "values": [1, 2, 3, 4, 5],
-                               "metric": "y", "rationale": "r"}]),
-        SensitivityCode(code=(
-            "import matplotlib.pyplot as plt\n"
-            "v=[1,2,3,4,5]; r=[x*2 for x in v]\n"
-            "plt.plot(v,r); plt.savefig('p1.png')\n"
-            "print(f'RESULT: parameter=p1 values={v} results={r}')\n"
-        )),
-        Interpretations(interpretations=["参数 p1 上升时 y 线性增长。"]),
-    ])
-
-    fc = FigureCriticOut(score=9, approved=True)
-    fa = FigureAnalysisOut(analysis="趋势单调。")
-    mocker.patch("math_agent.nodes.figure_pipeline.complete",
-                 side_effect=[fc, fa, fc, fa])
-
-    mocker.patch("math_agent.nodes.writer.complete",
-                 return_value=make_paper(keywords))
-    mocker.patch("math_agent.nodes.paper_critic.complete",
-                 return_value=CriticReport(target="paper", score=9, approved=True))
-    mocker.patch("math_agent.nodes.evaluation.complete",
-                 return_value=EvaluationReport(
-                     assumption_reasonableness=8, modeling_creativity=8,
-                     result_correctness=8, writing_clarity=8, extra_depth=8, overall=8.0))
-    mocker.patch("math_agent.nodes.latex.compile_latex",
-                 return_value=type("R", (), {"success": True, "pdf_path":"", "log":"",
-                                             "error_kind": ""})())
-
-
-def _evaluate(case_id: str, final_state: dict, expect: dict) -> BenchCase:
-    failures: list[str] = []
-    overall = (final_state.get("evaluation").overall
-               if final_state.get("evaluation") else 0.0)
-    if overall < expect["min_overall"]:
-        failures.append(f"overall {overall} < {expect['min_overall']}")
-    paper = final_state.get("paper")
-    text = " ".join([
-        paper.abstract or "", paper.model_section or "", paper.solution or "",
-        paper.conclusion or "",
-    ]) if paper else ""
-    for kw in expect.get("must_contain_keywords", []):
-        if kw not in text:
-            failures.append(f"missing keyword: {kw}")
-    if expect.get("must_have_sensitivity") and not final_state.get("sensitivity_runs"):
-        failures.append("missing sensitivity_runs")
-    if expect.get("must_have_figures") and not final_state.get("figures"):
-        failures.append("missing figures")
-    return BenchCase(problem_id=case_id, overall=overall,
-                     passed=not failures, failures=failures)
-
-
-def run_bench(*, mode: str, out_dir: str | Path) -> BenchReport:
-    """运行 bench；mock 模式下需要 pytest-mock 的 mocker fixture，
-    所以这个版本接受外部 mocker。CLI/CI 走 pytest 入口。
-    """
-    if mode != "mock":
-        raise NotImplementedError("live 模式由 CLI 直接调 build_graph 真跑，不在此函数内实现")
-
-    # 在 mock 模式下，本函数被 test 用例调用并提供 mocker；
-    # 为了让 test_runner_mock 不直接传 mocker，我们改用 patch 的 contextmanager。
-    from unittest.mock import patch
-    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    expectations = json.loads(_EXPECTATIONS.read_text(encoding="utf-8"))
-    cases: list[BenchCase] = []
-
-    for problem_path in sorted(_PROBLEMS_DIR.glob("*.json")):
-        case_id = problem_path.stem
-        expect = expectations[case_id]
-        problem = json.loads(problem_path.read_text(encoding="utf-8"))
-        case_out = out_dir / case_id
-        case_out.mkdir(parents=True, exist_ok=True)
-
-        # 使用 pytest-mock 风格不再适用，这里直接用 unittest.mock
-        import pytest_mock
-        mocker = pytest_mock.MockerFixture(config=None)  # type: ignore
-
-        _install_mocks(mocker, case_out, expect.get("must_contain_keywords", []))
-        try:
-            graph = build_graph()  # 不带 checkpointer，不带 interrupt
-            final = graph.invoke({
-                "problem": problem["title"] + "\n" + "\n".join(problem["questions"]),
-                "background": problem.get("background", ""),
-                "questions": problem["questions"],
-                "stage_target": "basic", "iteration": 0,
-                "output_dir": str(case_out),
-                "human_decision": HumanDecision(approved=True).model_dump(),
-            })
-            cases.append(_evaluate(case_id, final, expect))
-        finally:
-            mocker.resetall()
-
-    report = BenchReport(mode=mode, cases=cases)
-    (out_dir / "bench_report.json").write_text(
-        json.dumps({"mode": mode, "cases": [asdict(c) for c in cases]},
-                   ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return report
-```
-
-> 注：`pytest_mock.MockerFixture(config=None)` 直接构造在新版本可能不再可用。如果该方式失败，改用下面的等价 ContextManager 实现：
-
-```python
-# 替代实现：用 unittest.mock.patch 的 ExitStack
-from unittest.mock import patch
-from contextlib import ExitStack
-
-def _install_mocks_ctx(workdir, keywords):
-    stack = ExitStack()
-    # ...（把上面的 mocker.patch(...) 全部改为 stack.enter_context(patch(target, ...))）
-    return stack
-```
-
-> 实际实现中**推荐用 ExitStack 版本**；以上 MockerFixture 仅为可读性示意。执行 Task 3.2 时请直接采用 ExitStack 版本，重写 `_install_mocks` 为 `_install_mocks_ctx` 并在 `run_bench` 中 `with _install_mocks_ctx(case_out, ...) as _:` 包住 graph 调用。
-
-**显式落地版本 `_install_mocks_ctx`：**
-
-```python
-from contextlib import ExitStack
-from unittest.mock import patch
-
-
-def _install_mocks_ctx(workdir: Path, keywords: list[str]):
-    stack = ExitStack()
-    fig_path = make_png(workdir / "code" / "fig.png")
-    sens_png = workdir / "sensitivity" / "p1.png"
-    sens_png.parent.mkdir(parents=True, exist_ok=True)
-    make_png(sens_png)
+    _make_png(sens_png)
 
     def _patch(target, **kw):
         stack.enter_context(patch(target, **kw))
@@ -1758,40 +1605,169 @@ def _install_mocks_ctx(workdir: Path, keywords: list[str]):
     fa = FigureAnalysisOut(analysis="趋势单调。")
     _patch("math_agent.nodes.figure_pipeline.complete",
            side_effect=[fc, fa, fc, fa])
-    _patch("math_agent.nodes.writer.complete", return_value=make_paper(keywords))
+
+    def _writer_side(*a, **k):
+        # 从 prompt 里捞 keywords —— 简化：取当前题的固定 keywords
+        return paper_factory(_writer_keywords[0] if _writer_keywords else [])
+    _writer_keywords: list[list[str]] = []
+    # 通过 monkey-patch 的方式让外层 set keywords
+    stack.callback(lambda: _writer_keywords.clear())
+    _patch("math_agent.nodes.writer.complete", side_effect=_writer_side)
     _patch("math_agent.nodes.paper_critic.complete",
            return_value=CriticReport(target="paper", score=9, approved=True))
     _patch("math_agent.nodes.evaluation.complete",
            return_value=EvaluationReport(
-               assumption_reasonableness=8, modeling_creativity=8,
+               assumption_reasonameableness=8, modeling_creativity=8,
                result_correctness=8, writing_clarity=8, extra_depth=8, overall=8.0))
     _patch("math_agent.nodes.latex.compile_latex",
            return_value=type("R", (), {"success": True, "pdf_path":"", "log":"",
                                        "error_kind": ""})())
-    return stack
+    return _writer_keywords
+
+
+@pytest.fixture
+def install_bench_mocks(tmp_path):
+    """默认 fixture：paper 必含 expectations 里的 keywords，所有题应 PASS。"""
+    with ExitStack() as stack:
+        keywords_holder = _patch_all_nodes(stack, tmp_path, _make_paper)
+        # runner 内部按 problem 设置 keywords；为简单起见这里 set 公共集合
+        keywords_holder.append(["覆盖", "无人机", "鲁棒", "内涝", "排水", "风险"])
+        yield
+
+
+@pytest.fixture
+def install_bench_mocks_missing_keyword(tmp_path):
+    """故意 paper 不含 keywords，验证 runner 能识别 FAIL。"""
+    def _empty_paper(keywords):
+        return _make_paper(keywords=["（缺失关键词的 paper）"])
+    with ExitStack() as stack:
+        _patch_all_nodes(stack, tmp_path, _empty_paper)
+        yield
+
+
+@pytest.fixture
+def install_bench_mocks_low_overall(tmp_path):
+    """让 evaluation overall=3.0，验证 runner 能识别 overall < min_overall 的失败路径。"""
+    with ExitStack() as stack:
+        keywords_holder = _patch_all_nodes(stack, tmp_path, _make_paper)
+        keywords_holder.append(["覆盖", "无人机", "鲁棒", "内涝", "排水", "风险"])
+        # 用 stack 再 patch evaluation 覆盖默认 8.0
+        stack.enter_context(patch(
+            "math_agent.nodes.evaluation.complete",
+            return_value=EvaluationReport(
+                assumption_reasonableness=2, modeling_creativity=3,
+                result_correctness=3, writing_clarity=3, extra_depth=2, overall=3.0,
+            ),
+        ))
+        yield
 ```
 
-并把 `run_bench` 内的两行替换成：
+> 注：上面 `paper_factory` 与 `_writer_keywords` 的串联只是示意；实际实现里可以让
+> runner 在每题前用 `monkeypatch.setattr` 重设 mock 返回值。**关键是 fixture 在 tests/ 里**。
+
+- [ ] **Step 3：实现纯净的 `src/math_agent/bench/runner.py`（不含 mock）**
 
 ```python
-        with _install_mocks_ctx(case_out, expect.get("must_contain_keywords", [])):
-            graph = build_graph()
-            final = graph.invoke({...})  # 同上
-            cases.append(_evaluate(case_id, final, expect))
+"""回归基准 runner：真跑 build_graph，按 expectations.json 判定通过。
+
+不引入测试库；mock 模式由 tests/bench/conftest.py 提供 fixture，本模块对此无感。
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from math_agent.graph import build_graph
+from math_agent.state import HumanDecision
+
+
+_BENCH_ROOT = Path(__file__).resolve().parent
+_PROBLEMS_DIR = _BENCH_ROOT / "problems"
+_EXPECTATIONS = _BENCH_ROOT / "expectations.json"
+
+
+@dataclass
+class BenchCase:
+    problem_id: str
+    overall: float
+    passed: bool
+    failures: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BenchReport:
+    cases: list[BenchCase]
+
+
+def _evaluate(case_id: str, final_state: dict, expect: dict) -> BenchCase:
+    failures: list[str] = []
+    overall = (final_state.get("evaluation").overall
+               if final_state.get("evaluation") else 0.0)
+    if overall < expect["min_overall"]:
+        failures.append(f"overall {overall} < {expect['min_overall']}")
+    paper = final_state.get("paper")
+    text = " ".join([
+        paper.abstract or "", paper.model_section or "", paper.solution or "",
+        paper.conclusion or "",
+    ]) if paper else ""
+    for kw in expect.get("must_contain_keywords", []):
+        if kw not in text:
+            failures.append(f"missing keyword: {kw}")
+    if expect.get("must_have_sensitivity") and not final_state.get("sensitivity_runs"):
+        failures.append("missing sensitivity_runs")
+    if expect.get("must_have_figures") and not final_state.get("figures"):
+        failures.append("missing figures")
+    return BenchCase(problem_id=case_id, overall=overall,
+                     passed=not failures, failures=failures)
+
+
+def run_bench(*, out_dir: str | Path) -> BenchReport:
+    """真跑每道题；caller（pytest mock fixture 或 CLI 真 API key）负责提供 LLM。
+
+    本函数不知道 LLM 是真是假——它只 invoke graph 并判定结果。
+    """
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    expectations = json.loads(_EXPECTATIONS.read_text(encoding="utf-8"))
+    cases: list[BenchCase] = []
+
+    for problem_path in sorted(_PROBLEMS_DIR.glob("*.json")):
+        case_id = problem_path.stem
+        expect = expectations[case_id]
+        problem = json.loads(problem_path.read_text(encoding="utf-8"))
+        case_out = out_dir / case_id
+        case_out.mkdir(parents=True, exist_ok=True)
+
+        graph = build_graph()  # bench 不带 checkpointer / interrupt
+        final = graph.invoke({
+            "problem": problem["title"] + "\n" + "\n".join(problem["questions"]),
+            "background": problem.get("background", ""),
+            "questions": problem["questions"],
+            "stage_target": "basic", "iteration": 0,
+            "output_dir": str(case_out),
+            "human_decision": HumanDecision(approved=True).model_dump(),
+        })
+        cases.append(_evaluate(case_id, final, expect))
+
+    report = BenchReport(cases=cases)
+    (out_dir / "bench_report.json").write_text(
+        json.dumps({"cases": [asdict(c) for c in cases]},
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return report
 ```
 
-把前面那段试探性的 `pytest_mock.MockerFixture(config=None)` 删除。
-
-- [ ] **Step 5：跑测试**
+- [ ] **Step 4：跑测试**
 
 Run: `pytest tests/bench/test_runner_mock.py -v`
-Expected: 3 passed.
+Expected: 5 passed.
 
-- [ ] **Step 6：提交**
+- [ ] **Step 5：提交**
 
 ```bash
-git add src/math_agent/bench/runner.py src/math_agent/bench/fixtures.py tests/bench/test_runner_mock.py
-git commit -m "feat(bench): mock-mode regression runner over historical problems"
+git add src/math_agent/bench/runner.py tests/bench/conftest.py tests/bench/test_runner_mock.py
+git commit -m "feat(bench): pure live runner in src; mock harness in tests"
 ```
 
 ---
@@ -1914,11 +1890,13 @@ class Tracer:
 
     @contextmanager
     def node(self, name: str):
-        rec = _NodeRecord(name=name, start_ms=int(time.time() * 1000))
+        # 用 monotonic_ns 测 duration，避免 NTP 校时回拨导致负值。
+        start_ns = time.monotonic_ns()
+        rec = _NodeRecord(name=name, start_ms=start_ns // 1_000_000)
         try:
             yield
         finally:
-            rec.duration_ms = int(time.time() * 1000) - rec.start_ms
+            rec.duration_ms = (time.monotonic_ns() - start_ns) // 1_000_000
             self.nodes.append(rec)
 
     def flush(self) -> Path:
@@ -2003,7 +1981,7 @@ from math_agent.tracing import get_current as _get_tracer
 
 ```python
 def _do_completion(**kw):
-    t0 = time.time()
+    t0_ns = time.monotonic_ns()
     try:
         resp = litellm.completion(**kw)
     except Exception as e:
@@ -2015,7 +1993,7 @@ def _do_completion(**kw):
             model=kw.get("model", "?"),
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
-            latency_ms=int((time.time() - t0) * 1000),
+            latency_ms=(time.monotonic_ns() - t0_ns) // 1_000_000,
         )
     return resp
 ```
@@ -2064,7 +2042,7 @@ from rich.console import Console
 from rich.table import Table
 ```
 
-并在 `pyproject.toml` dependencies 中加 `"rich>=13.7"`，`pip install -e ".[dev]"`。
+并在 `pyproject.toml` dependencies 中加 `"rich>=13.7,<14"`，`pip install -e ".[dev]"`。
 
 - [ ] **Step 2：在 `run` 命令开头创建 Tracer，在结束时 flush**
 
@@ -2151,8 +2129,12 @@ def ingest(
 
 @app.command()
 def bench(out: Path = typer.Option(Path("runs/bench"))):
+    """真跑历年题回归基准（live 模式，需要真 LLM API key）。
+
+    要跑 mock 模式（结构性校验，不消耗 API），用：pytest tests/bench/
+    """
     from math_agent.bench.runner import run_bench
-    rep = run_bench(mode="mock", out_dir=out)
+    rep = run_bench(out_dir=out)
     for c in rep.cases:
         flag = "PASS" if c.passed else "FAIL"
         typer.echo(f"[{flag}] {c.problem_id} overall={c.overall} failures={c.failures}")
@@ -2194,15 +2176,21 @@ import os
 _LITELLM_CALLBACKS_CONFIGURED = False
 
 
-def _configure_callbacks_once():
-    global _LITELLM_CALLBACKS_CONFIGURED
-    if _LITELLM_CALLBACKS_CONFIGURED:
-        return
+def _resolve_callback_names() -> list[str]:
+    """纯函数：根据环境变量返回 callback 名称列表。便于测试。"""
     cbs: list[str] = []
     if os.getenv("LANGSMITH_API_KEY"):
         cbs.append("langsmith")
     if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         cbs.append("otel")
+    return cbs
+
+
+def _configure_callbacks_once():
+    global _LITELLM_CALLBACKS_CONFIGURED
+    if _LITELLM_CALLBACKS_CONFIGURED:
+        return
+    cbs = _resolve_callback_names()
     if cbs:
         litellm.success_callback = cbs
         litellm.failure_callback = cbs
@@ -2211,28 +2199,24 @@ def _configure_callbacks_once():
 
 并在 `complete()` 顶部调用 `_configure_callbacks_once()`。
 
-- [ ] **Step 2：写一个 smoke 测试，断言 callback 在缺环境变量时不被配置**
+- [ ] **Step 2：写测试，断言纯函数 `_resolve_callback_names` 在缺环境变量时返回空列表**
 
 在 `tests/test_llm.py` 末尾：
 
 ```python
-def test_complete_does_not_configure_callbacks_without_env(monkeypatch, mocker):
+def test_resolve_callback_names_empty_without_env(monkeypatch):
+    """直接测纯函数，避免依赖 litellm 模块的全局状态（其他测试可能污染）。"""
+    from math_agent.llm import _resolve_callback_names
     monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-    import litellm as _ll
-    _ll.success_callback = []
-    _ll.failure_callback = []
-    mocker.patch(
-        "litellm.completion",
-        return_value=mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content="ok"))]
-        ),
-    )
-    # 强制重新允许配置
-    import math_agent.llm as L
-    L._LITELLM_CALLBACKS_CONFIGURED = False
-    L.complete("hi", model="gpt-4o-mini")
-    assert _ll.success_callback == []
+    assert _resolve_callback_names() == []
+
+
+def test_resolve_callback_names_includes_langsmith_when_env_set(monkeypatch):
+    from math_agent.llm import _resolve_callback_names
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    assert _resolve_callback_names() == ["langsmith"]
 ```
 
 - [ ] **Step 3：跑测试**
@@ -2275,11 +2259,13 @@ math-agent run --problem tests/fixtures/sample_problem.json --out runs/demo
 ## 2. 回归基准
 
 ```bash
-# mock 模式：不调 LLM，校验流水线结构 + 关键词覆盖
-math-agent bench --out runs/bench
-# 期望输出：每条 PASS
+# mock 模式：不调 LLM，校验流水线结构 + 关键词覆盖（CI / 本地快速检查）
+pytest tests/bench/ -v
+# 期望：每条 PASS
 
-# live 模式（贵；建议手动逐题跑）
+# live 模式（贵；建议手动逐题跑）—— 真调 LLM
+math-agent bench --out runs/bench
+# 或针对单题 debug
 math-agent run --problem src/math_agent/bench/problems/2022_A.json --out runs/live/2022_A
 ```
 
@@ -2301,10 +2287,10 @@ math-agent report --out runs/demo
 | LLM 429 | LLMRateLimitError | 是（指数退避） | 默认 4 次，可调 `max_retries` |
 | LLM JSON 解析失败 | LLMValidationError | 否（complete 内部喂回错误重试） | 看 schema 是否过严 |
 | LLM 超时/连接错误 | LLMTransportError | 是 | 检查 `LITELLM_LOG=DEBUG` 输出 |
-| 沙箱超时 | SandboxResult(error_kind="timeout") | Coder 内部重试 1 次 | 加大 `timeout` 或简化代码 |
-| 沙箱运行错误 | SandboxResult(error_kind="runtime") | Coder 内部重试 1 次 | 看 stderr |
-| xelatex 缺失 | LatexResult(error_kind="missing_binary") | 否 | 安装 TeX Live 或回退 Markdown |
-| xelatex 编译失败 | LatexResult(error_kind="compile") | 否 | 看 `paper.log`；模板字体可能缺失 |
+| runner 超时 | `RunResult(error_kind="timeout")` | Coder 内部重试 1 次 | 加大 `timeout` 或简化代码 |
+| runner 运行错误 | `RunResult(error_kind="runtime")` | Coder 内部重试 1 次 | 看 stderr |
+| xelatex 缺失 | `LatexResult(error_kind="missing_binary")` | 否 | 安装 TeX Live 或回退 Markdown |
+| xelatex 编译失败 | `LatexResult(error_kind="compile")` | 否 | 看 `paper.log`；模板字体可能缺失 |
 ```
 
 - [ ] **Step 2：提交**
@@ -2376,7 +2362,9 @@ git commit -m "docs: README references plan C deliverables"
 
 **2. Placeholder 扫描**
 
-- Phase 3 Task 3.2 我先示意了一个不可用的 `pytest_mock.MockerFixture(config=None)` 写法，紧接着给出**显式落地版本 `_install_mocks_ctx`**（基于 `ExitStack + unittest.mock.patch`）。执行者必须采用显式落地版本。这不是 TODO/TBD，是两种方案的对比说明 + 明确选择，但容易被误读 —— 我已经在文中明确写了"实际实现中**推荐用 ExitStack 版本**；执行 Task 3.2 时请直接采用 ExitStack 版本"。
+- Phase 3 Task 3.2 已经把 bench mock harness 从 `src/math_agent/bench/` 挪到
+  `tests/bench/conftest.py`，runner.py 只剩纯 live 实现；CLI `bench` 子命令也只跑 live。
+  mock 模式从 pytest 入口跑（`pytest tests/bench/`）。
 - Task 2.6 修改 modeler/writer 节点时给出了"查询字符串构造方式"（`latest_model().description + " " + state.problem` / `state.problem + state.paper.model_section[:500]`）—— 是具体的、非 TBD 的指令。
 - Task 5.2 的运行手册中"live 模式（贵；建议手动逐题跑）"是说明性指引而非占位。
 - 其余无 TODO / "实现 X 即可" / "类似 Task N" 等占位。
@@ -2389,7 +2377,7 @@ git commit -m "docs: README references plan C deliverables"
 - `IngestReport(files_processed, chunks_added, skipped)` 在 ingest / CLI 输出一致 ✓
 - `BenchCase(problem_id, overall, passed, failures)` 与 `BenchReport(mode, cases)` 在 runner / 测试 / CLI 输出一致 ✓
 - `Tracer.log_llm(model, prompt_tokens, completion_tokens, latency_ms)` 在 tracing 内部 / llm.py 调用处签名一致 ✓
-- `SandboxResult.error_kind` ∈ {"", "timeout", "runtime"}；`LatexResult.error_kind` ∈ {"", "missing_binary", "compile", "timeout"} —— 两组字典都在 Phase 1.4 中给出确定取值，与运行手册速查表一致 ✓
+- `RunResult.error_kind` ∈ {"", "timeout", "runtime"}；`LatexResult.error_kind` ∈ {"", "missing_binary", "compile", "timeout"} —— 两组字典都在 Phase 1.4 中给出确定取值，与运行手册速查表一致 ✓
 - `llm.complete` 新增的私有参数 `_retry_attempts` / `_retry_base_delay` 在 Task 1.3 / Task 1.4 测试中使用一致 ✓
 - RAG 配置 `RAG_ENABLED` / `RAG_DB_PATH` / `RAG_EMBEDDING_MODEL` / `RAG_EMBEDDING_DIM` / `RAG_TOPK` 在 config.py 与三个节点中名称完全一致 ✓
 
@@ -2405,4 +2393,4 @@ Plan complete and saved to `docs/superpowers/plans/2026-06-28-math-agent-plan-c.
 
 **2. Inline Execution** — 我在当前会话里按 executing-plans 流程逐 Task 执行，带 checkpoint 让你审查。
 
-哪种方式？或者你想先**调整计划**（例如：把 sqlite-vec 换成 chroma/qdrant、bench 直接跑 live 模式、tracing 默认接 LangSmith 而非自建 JSON、Coder 节点也加 sandbox_retry 等），告诉我即可。
+哪种方式？或者你想先**调整计划**（例如：把 sqlite-vec 换成 chroma/qdrant、bench 直接跑 live 模式、tracing 默认接 LangSmith 而非自建 JSON、Coder 节点也加 runner_retry 等），告诉我即可。
