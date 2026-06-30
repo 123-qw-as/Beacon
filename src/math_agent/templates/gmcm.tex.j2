@@ -2,6 +2,9 @@
 \usepackage{amsmath}
 \numberwithin{figure}{section}
 \renewcommand{\thefigure}{\arabic{section}-\arabic{figure}}
+% 覆盖 cls 默认的 `4 . 1` 风格 (thinspace.thinspace) → 改为标准 `4.1`
+\renewcommand\thesubsection{\arabic{section}.\arabic{subsection}}
+\renewcommand\thesubsubsection{\thesubsection.\arabic{subsubsection}}
 
 \title{ {{- problem -}} }
 \baominghao{ {{- team_id | default("No.00000001") -}} }
@@ -75,7 +78,7 @@
 \appendix
 \section{程序代码}
 {% for art in code_artifacts %}
-\subsection{ {{- art.purpose -}} }
+\subsection[代码 {{ loop.index }}]{ {{- art.purpose -}} }
 \begin{lstlisting}[language=Python]
 {{ art.code }}
 \end{lstlisting}

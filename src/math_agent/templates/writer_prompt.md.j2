@@ -154,9 +154,12 @@ PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.appr
   "solution": str,
   "sensitivity": str,
   "conclusion": str,
-  "references": str
+  "references": str,
+  "keywords": str
 }
 ```
+
+`keywords`：5 个具体关键词，逗号分隔，例如 `"混合整数规划, 时空图神经网络, 条件风险价值, 敏感性分析, 共享单车"`。**禁止**写成空泛词如"数学建模/优化/多智能体"。
 
 生成前，请在思考中先完成 5 维自检（不输出）：
 - 假设合理性：每条假设是否在 `assumptions` 章节被显式承接？

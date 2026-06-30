@@ -95,6 +95,7 @@ class PaperSections(BaseModel):
     sensitivity: str = ""            # Plan B 引入
     conclusion: str = ""
     references: str = ""
+    keywords: str = ""               # 摘要末尾的关键词，逗号分隔（gmcm 模板用）
 
 
 class MathModelingState(BaseModel):

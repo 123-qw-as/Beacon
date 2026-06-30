@@ -447,7 +447,7 @@ def latex_node(state: MathModelingState) -> dict:
             member_a=mem[0] or None,
             member_b=mem[1] or None,
             member_c=mem[2] or None,
-            keywords="数学建模, 多智能体, 优化",  # writer 未生成关键词；后续 plan 可加
+            keywords=(state.paper.keywords or "数学建模").strip(),
             code_artifacts=[a for a in state.code_artifacts if a.success],
         )
         # cls 必须和 .tex 在同一目录才能被 xelatex 找到；封面图也要带上
