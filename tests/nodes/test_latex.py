@@ -75,11 +75,11 @@ def test_wrap_unicode_math_attaches_subscript():
 
 
 def test_md_headings_to_latex():
-    """### basic阶段 → \\subsubsection*{basic阶段}（带 *：不进目录）。"""
+    """### basic阶段 → \\subsubsection{basic阶段}（带编号版本以入目录）。"""
     s = "### basic阶段\n内容\n\n## 章节"
     out = _md_headings_to_latex(s)
-    assert r"\subsubsection*{basic阶段}" in out
-    assert r"\subsection*{章节}" in out
+    assert r"\subsubsection{basic阶段}" in out
+    assert r"\subsection{章节}" in out
     assert "###" not in out
     assert "## 章节" not in out
 
@@ -89,7 +89,7 @@ def test_md_headings_only_match_line_start():
     s = "成本 #1 是 ## 5\n# title\nbody"
     out = _md_headings_to_latex(s)
     assert "成本 #1 是 ## 5" in out  # 行内 # 不动
-    assert r"\section*{title}" in out
+    assert r"\section{title}" in out
 
 
 def test_md_inline_code_to_math():
@@ -160,7 +160,7 @@ def test_latex_node_processes_markdown_in_paper(mocker, workdir):
     s.paper.model_section = "### basic阶段\n参数 σ 是常数。"
     latex_node(s)
     tex = (workdir / "paper.tex").read_text(encoding="utf-8")
-    assert r"\subsubsection*{basic阶段}" in tex
+    assert r"\subsubsection{basic阶段}" in tex
     assert r"$\sigma$" in tex
     assert "###" not in tex
 
@@ -199,10 +199,10 @@ def test_md_table_to_latex():
 
 下文。"""
     out = _md_table_to_latex(s)
-    assert r"\begin{tabular}{|l|l|l|}" in out
+    assert r"\begin{tabularx}{\linewidth}{|X|X|X|}" in out
     assert r"符号 & 含义 & 单位 \\" in out
     assert r"S_i & 库存 & 辆 \\" in out
-    assert r"\end{tabular}" in out
+    assert r"\end{tabularx}" in out
     assert "|------|" not in out
     assert "| 符号 |" not in out
     assert "下文。" in out

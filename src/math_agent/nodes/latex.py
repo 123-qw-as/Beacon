@@ -94,8 +94,9 @@ def _wrap_unicode_math(s: str) -> str:
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+# 带编号版本：让小节进目录、有编号（gmcm 模板顶层 \section 已经用；writer 用 ## 表示子节）
 _HEADING_LEVELS = {
-    1: r"\section*",     2: r"\subsection*",  3: r"\subsubsection*",
+    1: r"\section",      2: r"\subsection",   3: r"\subsubsection",
     4: r"\paragraph",    5: r"\subparagraph", 6: r"\subparagraph",
 }
 
@@ -247,8 +248,10 @@ def _md_table_to_latex(s: str) -> str:
             if sep.startswith("|") and set(sep) <= set("|-: "):
                 header_cells = [c.strip() for c in line.strip().strip("|").split("|")]
                 ncols = len(header_cells)
-                col_spec = "|" + "l|" * ncols
-                tbl = [r"\begin{tabular}{" + col_spec + r"}",
+                # tabularx 自适应列宽（gmcmthesis 已 RequirePackage{tabularx}）；
+                # 第一列窄一点（符号/编号），其余等分。3 列以下也走一致策略。
+                col_spec = "|" + "X|" * ncols
+                tbl = [r"\begin{tabularx}{\linewidth}{" + col_spec + r"}",
                        r"\hline",
                        " & ".join(header_cells) + r" \\",
                        r"\hline"]
@@ -260,7 +263,7 @@ def _md_table_to_latex(s: str) -> str:
                     tbl.append(" & ".join(cells) + r" \\")
                     tbl.append(r"\hline")
                     j += 1
-                tbl.append(r"\end{tabular}")
+                tbl.append(r"\end{tabularx}")
                 # 表格前后留空行让 LaTeX 不把表格挤进段落
                 out.append("")
                 out.extend(tbl)
