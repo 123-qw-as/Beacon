@@ -1,6 +1,7 @@
 """litellm.embedding 包装：支持批处理 + 经 retry 装饰。"""
 from __future__ import annotations
 
+# 继承 llm.py 模块级一次性抑制（LiteLLM logger / debug info 已在 llm 模块导入时设好）
 import litellm
 
 from math_agent.errors import classify_exception

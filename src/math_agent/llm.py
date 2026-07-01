@@ -14,7 +14,20 @@ import json
 import time
 from typing import Any, Type, TypeVar
 
+# 模块级一次性抑制 LiteLLM banner 噪音（每次 completion/embedding 都打极吵）
+import logging as _logging
+_pl = _logging.getLogger("LiteLLM")
+_pl.propagate = False
+_pl.handlers.clear()
+_pl.addHandler(_logging.NullHandler())
+
 import litellm
+# 关掉 litellm 自带的各种 print 调试输出（Provider List 横幅 / cost map fetch 警告）
+litellm.suppress_debug_info = True
+litellm.set_verbose = False
+import os
+os.environ.setdefault("LITELLM_LOG", "CRITICAL")
+
 from pydantic import BaseModel, ValidationError
 
 from math_agent.config import DEFAULT_MODEL, MAX_LLM_RETRIES

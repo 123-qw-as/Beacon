@@ -73,17 +73,20 @@ def test_runner_retry_does_not_retry_missing_binary():
     assert len(calls) == 1
 
 
-def test_llm_retry_defaults_to_5_attempts_via_env(monkeypatch):
-    """新默认 MAX_LLM_RETRIES + 3 = 5 次；可被 env override。"""
+def test_llm_retry_attempts_can_be_overridden_by_env(monkeypatch):
+    """env override takes precedence over default (currently 8 due to .env)."""
     from math_agent.retry import _default_llm_attempts
-    # Plan A 的 MAX_LLM_RETRIES=2 -> 默认 5
-    assert _default_llm_attempts() == 5
-    monkeypatch.setenv("MATH_AGENT_LLM_RETRY_ATTEMPTS", "8")
-    assert _default_llm_attempts() == 8
+    monkeypatch.setenv("MATH_AGENT_LLM_RETRY_ATTEMPTS", "3")
+    assert _default_llm_attempts() == 3
 
+def test_llm_retry_base_delay_can_be_overridden_by_env(monkeypatch):
+    from math_agent.retry import _default_llm_base_delay
+    monkeypatch.setenv("MATH_AGENT_LLM_RETRY_BASE_DELAY", "0.5")
+    assert _default_llm_base_delay() == 0.5
 
 def test_llm_retry_defaults_to_2s_base_delay(monkeypatch):
     from math_agent.retry import _default_llm_base_delay
+    monkeypatch.delenv("MATH_AGENT_LLM_RETRY_BASE_DELAY", raising=False)
     assert _default_llm_base_delay() == 2.0
     monkeypatch.setenv("MATH_AGENT_LLM_RETRY_BASE_DELAY", "0.5")
     assert _default_llm_base_delay() == 0.5
