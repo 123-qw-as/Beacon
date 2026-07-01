@@ -93,6 +93,100 @@ def _wrap_unicode_math(s: str) -> str:
     return "$".join(parts)
 
 
+# `\cmd` 后紧跟字母会被 xelatex 认成一个更长的命令：
+#   `\cdot dist_ij` → OK （空格分隔）
+#   `\cdotdist_ij`  → \cdotdist 未定义控制序列，halt-on-error 直接停编译
+# writer 从 markdown 抽 markdown-math 时经常把 `$\cdot$dist_{ij}$` 写成
+# 挤在一起。在这些命令后自动补 `\,`（薄空格，不影响排版）。
+#
+# 只在 $...$ math span 内做，text 段的 `\textbf` 等命令外部由 latex 自身
+# 边界规则（大括号/空白）判定。
+#
+# 关键：字符串 `\cdotp` 有两种合法解读——`\cdotp`（自身是命令）或
+# `\cdot`+`p`（两截）。正则本身分不出，必须用命令白名单：
+# - 完整词命中已知命令（如 `\cdotp`） → 不动
+# - 完整词命中未知命令但**最长已知前缀存在** → 在前缀后插 `\,`
+# - 完整词命中未知命令且无已知前缀 → 不动（写手自己的锅）
+_KNOWN_MATH_CMDS = frozenset({
+    # 二元关系
+    "leq", "geq", "neq", "leqslant", "geqslant", "approx", "sim", "propto",
+    "equiv", "in", "notin", "subset", "supset", "cup", "cap",
+    # 二元/一元算子
+    "cdot", "cdotp", "times", "div", "pm", "mp", "ast", "star", "circ",
+    # 大运算符
+    "sum", "prod", "int", "iint", "iiint", "oint", "bigcup", "bigcap",
+    "lim", "sup", "inf", "max", "min", "arg",
+    # 希腊字母（小写）
+    "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta",
+    "eta", "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu",
+    "xi", "omicron", "pi", "varpi", "rho", "varrho", "sigma", "varsigma",
+    "tau", "upsilon", "phi", "varphi", "chi", "psi", "omega",
+    # 希腊字母（大写）
+    "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon",
+    "Phi", "Psi", "Omega",
+    # 常用符号
+    "infty", "partial", "nabla", "forall", "exists", "emptyset", "hbar",
+    "ell", "Re", "Im", "aleph", "cdots", "ldots", "vdots", "ddots",
+    # 字体/装饰
+    "hat", "bar", "tilde", "vec", "dot", "ddot", "overline", "underline",
+    "widehat", "widetilde", "mathbb", "mathbf", "mathcal", "mathrm",
+    "boldsymbol", "text", "textrm", "textbf", "textit",
+    # 分式/根号
+    "frac", "sqrt", "binom", "dfrac", "tfrac",
+    # 左右括号
+    "left", "right",
+    # 常用函数名
+    "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp",
+    "sinh", "cosh", "tanh", "det", "gcd", "deg", "dim", "ker",
+})
+
+# 命令名词：`\` + 一段字母（LaTeX 词法完全等价）
+_MATH_CMD_WORD_RE = re.compile(r"\\([A-Za-z]+)")
+
+
+def _split_known_prefix(word: str) -> str | None:
+    """返回 word 的最长已知命令前缀（不含尾部残余），若不存在返回 None。"""
+    for n in range(len(word) - 1, 0, -1):  # 前缀长度从长到短，且必须留至少 1 字符尾部
+        if word[:n] in _KNOWN_MATH_CMDS:
+            return word[:n]
+    return None
+
+
+def _pad_math_commands(s: str) -> str:
+    """在 math span（`$...$`）和 equation 块内，把 `\\<known-cmd><letters>`
+    拆为 `\\<known-cmd>\\,<letters>`。
+
+    只处理"最长已知前缀 + 未知尾巴"的情形；完整词命中已知命令的（如 `\\cdotp`）
+    不动；完整词非已知命令也无已知前缀的（如 `\\myVar`）也不动，避免误伤写手
+    自定义宏。text 段（`$` 之外、equation 块之外）完全跳过。
+    """
+    if not s:
+        return s
+
+    def _sub(m: re.Match) -> str:
+        word = m.group(1)
+        if word in _KNOWN_MATH_CMDS:
+            return m.group(0)  # 完整词就是合法命令
+        prefix = _split_known_prefix(word)
+        if prefix is None:
+            return m.group(0)  # 未知，不动
+        rest = word[len(prefix):]
+        return f"\\{prefix}\\,{rest}"
+
+    # 先按 equation 块切；块内直接处理，块外再按 $ 切处理 inline math span
+    eq_re = re.compile(r"(\\begin\{equation\*?\}.*?\\end\{equation\*?\})", re.DOTALL)
+    outer = eq_re.split(s)
+    for k in range(len(outer)):
+        if outer[k].startswith(r"\begin{equation"):
+            outer[k] = _MATH_CMD_WORD_RE.sub(_sub, outer[k])
+        else:
+            parts = outer[k].split("$")
+            for i in range(1, len(parts), 2):  # 奇数段 = math span
+                parts[i] = _MATH_CMD_WORD_RE.sub(_sub, parts[i])
+            outer[k] = "$".join(parts)
+    return "".join(outer)
+
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 # 带编号版本：让小节进目录、有编号（gmcm 模板顶层 \section 已经用；writer 用 ## 表示子节）
 _HEADING_LEVELS = {
@@ -158,9 +252,14 @@ def _md_inline_code_to_math(s: str) -> str:
 def _wrap_naked_subscripts(s: str) -> str:
     """把行内裸的 LaTeX 下标/上标自动包成 $...$。
 
-    覆盖 writer RULE 4 没治住的 `D_i`、`c_{ij}`、`S_i^{(1)}`、`λ_i^net`。
+    覆盖 writer RULE 4 治不住的 `D_i`、`c_{ij}`、`S_i^{(1)}`、`λ_i^net`。
     跳过已在 $...$ 内、跳过 \\command 前缀（避免动 \\paragraph{w\\_RF}）。
     若 token 内含 unicode 数学字符（λ/σ 等），同步展开为 LaTeX 命令。
+
+    还要**跳过 display math 块**：`\\[...\\]`、`\\(...\\)`、
+    `\\begin{equation}...\\end{equation}`。这些已经是 math mode，再往里嵌 `$...$`
+    会触发 'Display math should end with $$' halt。writer 写
+    `\\[ \\min \\sum_k d_{ij} x_{ijk} \\]` 时，d_{ij} 不该被再包成 $d_{ij}$。
 
     已知 over-wrap 风险：`a_b_c` 这种合法变量名也会被当数学。但 paper 段里
     几乎不会出现，且即便错伤，渲出来仍是合法 LaTeX（math italic 显示）。
@@ -175,10 +274,29 @@ def _wrap_naked_subscripts(s: str) -> str:
                 content = content.replace(ch, cmd)
         return f"${content}$"
 
-    parts = s.split("$")
-    for i in range(0, len(parts), 2):
-        parts[i] = _NAKED_SUB_RE.sub(_sub, parts[i])
-    return "$".join(parts)
+    def _process_text(t: str) -> str:
+        # 已是 display/inline math span 切分后的 text 段：只用 $ 切分跳 inline
+        parts = t.split("$")
+        for i in range(0, len(parts), 2):
+            parts[i] = _NAKED_SUB_RE.sub(_sub, parts[i])
+        return "$".join(parts)
+
+    # 先按 display/inline math 块切分；块内 (display) 不动，偶数段 (text) 内继续按 $ 切
+    # 兼容：\[ ... \]、\( ... \)、\begin{equation} ... \end{equation}
+    display_re = re.compile(
+        r"(\\\[.*?\\\]|\\\(.*?\\\)|\\begin\{equation\*?\}.*?\\end\{equation\*?\})",
+        re.DOTALL,
+    )
+    out = []
+    last = 0
+    for m in display_re.finditer(s):
+        # 块前 text 段
+        out.append(_process_text(s[last:m.start()]))
+        # 块内原样保留
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_process_text(s[last:]))
+    return "".join(out)
 
 
 # ===== Markdown 排版 → LaTeX 命令 =====
@@ -387,8 +505,30 @@ def _prepare_section(s: str) -> str:
     s = _wrap_naked_subscripts(s)
     s = _wrap_unicode_math(s)
     s = _promote_inline_equations(s)
+    s = _pad_math_commands(s)   # `$\cdot$dist_{ij}$` -> `$\cdot\,dist_{ij}$`
     s = _escape_remaining_underscores(s)
     return s
+
+
+def _truncate_caption(s: str, *, max_chars: int = 55) -> str:
+    """把长图注截到 max_chars 以内，但优先切在完整句/短语边界。
+
+    LLM 写的图 caption 常常两三个句子；直接 `s[:55]` 会切在逗号/单字上（"…成本增加，"、"…前"）。
+    策略：先看 max_chars 处是否已是终结符；否则在 [max_chars*0.6, max_chars] 内找最靠后的
+    句末字符（。！？；.!?）；没有则退到最靠后的逗号（，、,）；再退不到就硬截。
+    """
+    if not s or len(s) <= max_chars:
+        return s
+    hard_end = s[max_chars - 1]
+    if hard_end in "。！？；.!?":
+        return s[:max_chars]
+    lo = max(1, int(max_chars * 0.6))
+    window = s[lo:max_chars]
+    for stops in ("。！？；.!?", "，、,"):
+        idx = max((window.rfind(c) for c in stops), default=-1)
+        if idx != -1:
+            return s[: lo + idx + 1]
+    return s[:max_chars]
 
 
 def latex_node(state: MathModelingState) -> dict:
@@ -396,14 +536,14 @@ def latex_node(state: MathModelingState) -> dict:
     workdir.mkdir(parents=True, exist_ok=True)
 
     # ponytail: 为图重打一份 LaTeX 安全视图，避免 caption/path 里的 _/&/% 炸编译
-    # caption 限到约 55 字（包含完整结尾标点）
+    # caption 尽量截到最近的句/短语边界，避免"曲线呈下降趋势，"这种半截逗号结尾
     # analysis 走完整 _prepare_section（v8 实测：figure_pipeline LLM 在图说里
     # 会写 sensitivity_capacity.png 这种文件名，必须 escape）
     safe_figures = [
         FigureArtifact(
             path=_latex_path(f.path),
             purpose=_latex_escape(f.purpose),
-            caption=_latex_escape((f.caption or f.purpose)[:55]),
+            caption=_latex_escape(_truncate_caption(f.caption or f.purpose, max_chars=55)),
             quality_score=f.quality_score,
             quality_issues=list(f.quality_issues),
             analysis=_prepare_section(f.analysis),

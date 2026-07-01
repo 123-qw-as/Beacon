@@ -43,3 +43,14 @@ pytest -q
 - 历年国一题回归基准
 - RAG（历年论文 / 经典模型库）
 - LangSmith / OTel 链路追踪
+
+## 已完成（Plan C）
+
+- 统一错误类型（`errors.py`）+ tenacity 重试装饰（`retry.py`）
+- `tools/runner.py` / `tools/latex_compile.py` 输出结构化 `error_kind`
+- **RAG**：md/txt/pdf → 切块 → litellm embedding → sqlite-vec；Analyst/Modeler/Writer prompt 自动注入（受 `MATH_AGENT_RAG_ENABLED` 控制）
+- **bench**：mock 模式回归两道历年题，写出 JSON 报告；CLI `math-agent bench` 真跑
+- **tracing**：LLM 调用数 / token / 节点耗时落到 `trace.json`，`math-agent report` 可视化
+- 可选 LangSmith / OTel callback（仅当对应环境变量存在时启用）
+
+完整运行手册：[docs/plan-c-runbook.md](docs/plan-c-runbook.md)

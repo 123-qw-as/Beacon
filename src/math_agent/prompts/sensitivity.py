@@ -40,14 +40,32 @@ CODE_SYSTEM = (
 )
 
 
-def build_code_prompt(model, plan_runs, prev_failure: str | None = None):
+def build_code_prompt(model, plan_runs, prev_failure: str | None = None,
+                      prev_error_kind: str = ""):
+    """构造敏感性扫参代码 prompt。
+
+    prev_error_kind: RunResult.error_kind，∈ {"", "timeout", "runtime"}
+      timeout → 让 LLM 缩规模（值列表变短、MC 次数变少）而不是修 bug
+      runtime → 喂 stderr 让它修
+    """
     desc = "\n".join(
         f"- parameter={r['parameter']}, values={r['values']}, metric={r['metric']}"
         for r in plan_runs
     )
     fb = ""
     if prev_failure:
-        fb = f"\n# 上次运行失败\nstderr 节选：\n{prev_failure[:1000]}\n请修正后重试。\n"
+        if prev_error_kind == "timeout":
+            fb = (
+                "\n# 上次扫参超时\n"
+                f"标记：{prev_failure[:200]}\n"
+                "请**大幅缩小扫参规模**（示例：每个参数的 values 缩到 3-5 个点、"
+                "内层仿真步数减半），保证 5 分钟内跑完；扫参逻辑不必改。\n"
+            )
+        else:
+            fb = (
+                f"\n# 上次运行失败（runtime）\n"
+                f"stderr 节选：\n{prev_failure[:1000]}\n请修正后重试。\n"
+            )
     return (
         f"# 最终模型\n{model.description}\n方程：\n{chr(10).join(model.equations)}\n\n"
         f"# 敏感性分析计划\n{desc}\n{fb}\n"

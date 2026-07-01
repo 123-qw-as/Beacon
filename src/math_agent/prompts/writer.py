@@ -26,9 +26,9 @@ _env = Environment(
 )
 
 
-def build_prompt(state: MathModelingState) -> str:
+def build_prompt(state: MathModelingState, *, retrieved_context: str = "") -> str:
     tmpl = _env.get_template("writer_prompt.md.j2")
-    return tmpl.render(
+    rendered = tmpl.render(
         problem=state.problem,
         assumptions=state.assumptions,
         model_versions=state.model_versions,
@@ -37,3 +37,7 @@ def build_prompt(state: MathModelingState) -> str:
         figures=state.figures,
         prior_critic=state.latest_critic("paper"),
     )
+    if retrieved_context:
+        # 追加到模板渲染结果末尾，避免改动模板文件
+        rendered = rendered + "\n\n" + retrieved_context
+    return rendered

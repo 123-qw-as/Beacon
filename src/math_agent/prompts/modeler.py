@@ -7,7 +7,8 @@ SYSTEM = (
 )
 
 
-def build_prompt(problem, assumptions, prev_model, stage, critic_feedback=None):
+def build_prompt(problem, assumptions, prev_model, stage, critic_feedback=None,
+                 retrieved_context: str = ""):
     asum = "\n".join(f"- {a.statement}（依据：{a.rationale}）" for a in assumptions) or "（暂无）"
     prev = "（无前一版本）"
     if prev_model is not None:
@@ -17,10 +18,12 @@ def build_prompt(problem, assumptions, prev_model, stage, critic_feedback=None):
         fb = "\n# 上一版 Critic 反馈\n" + "\n".join(
             f"- 问题: {i}" for i in critic_feedback.issues
         ) + "\n" + "\n".join(f"- 建议: {s}" for s in critic_feedback.suggestions)
+    ctx = f"\n{retrieved_context}\n" if retrieved_context else ""
 
     return (
         f"# 题目\n{problem}\n\n# 当前阶段\n{stage}\n\n"
-        f"# 已确认假设\n{asum}\n\n# 上一版模型\n{prev}\n{fb}\n\n"
+        f"# 已确认假设\n{asum}\n\n# 上一版模型\n{prev}\n{fb}\n"
+        f"{ctx}\n"
         f"请输出 JSON：{{\n"
         f"  \"stage\": \"{stage}\",\n"
         f"  \"description\": str,        # 模型定位与核心思路，>= 200 字\n"

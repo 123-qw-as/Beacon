@@ -45,3 +45,30 @@ def test_modeler_ignores_other_stage_critic(mocker):
     prompt_arg = spy.call_args.args[0]
     assert "basic-issue" not in prompt_arg
     assert "basic-fix" not in prompt_arg
+
+
+def test_modeler_does_not_query_rag_when_disabled(mocker):
+    mocker.patch("math_agent.nodes.modeler.RAG_ENABLED", False)
+    spy = mocker.patch("math_agent.nodes.modeler.search")
+    mocker.patch(
+        "math_agent.nodes.modeler.complete",
+        return_value=ModelVersion(stage="basic", description="d"*200),
+    )
+    s = MathModelingState(problem="p", stage_target="basic")
+    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    modeler_node(s)
+    spy.assert_not_called()
+
+
+def test_modeler_queries_rag_when_enabled(mocker):
+    mocker.patch("math_agent.nodes.modeler.RAG_ENABLED", True)
+    mocker.patch("math_agent.nodes.modeler.RAG_DB_PATH", "/tmp/nonexistent.db")
+    spy = mocker.patch("math_agent.nodes.modeler.search", return_value=[])
+    mocker.patch(
+        "math_agent.nodes.modeler.complete",
+        return_value=ModelVersion(stage="basic", description="d"*200),
+    )
+    s = MathModelingState(problem="p", stage_target="basic")
+    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    modeler_node(s)
+    spy.assert_called_once()

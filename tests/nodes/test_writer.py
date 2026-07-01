@@ -170,3 +170,28 @@ def test_prompt_includes_latex_compat_rule():
     assert "$...$" in p
     assert "希腊字母" in p
     assert "markdown 标题" in p
+
+
+def test_writer_does_not_query_rag_when_disabled(mocker):
+    from math_agent.nodes.writer import writer_node as _wn
+    mocker.patch("math_agent.nodes.writer.RAG_ENABLED", False)
+    spy = mocker.patch("math_agent.nodes.writer.search")
+    mocker.patch(
+        "math_agent.nodes.writer.complete",
+        return_value=PaperSections(),
+    )
+    _wn(_rich_state())
+    spy.assert_not_called()
+
+
+def test_writer_queries_rag_when_enabled(mocker):
+    from math_agent.nodes.writer import writer_node as _wn
+    mocker.patch("math_agent.nodes.writer.RAG_ENABLED", True)
+    mocker.patch("math_agent.nodes.writer.RAG_DB_PATH", "/tmp/nonexistent.db")
+    spy = mocker.patch("math_agent.nodes.writer.search", return_value=[])
+    mocker.patch(
+        "math_agent.nodes.writer.complete",
+        return_value=PaperSections(),
+    )
+    _wn(_rich_state())
+    spy.assert_called_once()

@@ -328,3 +328,151 @@ def test_latex_node_figure_caption_truncated(mocker, workdir):
     import re
     m = re.search(r"\\caption\{([^}]+)\}", tex)
     assert m and len(m.group(1)) <= 56  # +1 容忍尾标点
+
+
+def test_default_paper_tex_template_declares_tabularx_and_booktabs():
+    r"""回归：_md_table_to_latex 会吐 \begin{tabularx}{...}{X X X} + \toprule/\midrule/\bottomrule；
+    default 模板 preamble 必须引入这两个包，否则含表格的 markdown 编译失败（Plan C 首次 RAG 跑复现）。"""
+    from pathlib import Path
+    tpl = (Path(__file__).resolve().parent.parent.parent
+           / "src" / "math_agent" / "templates" / "paper.tex.j2")
+    src = tpl.read_text(encoding="utf-8")
+    assert r"\usepackage{tabularx}" in src
+    assert r"\usepackage{booktabs}" in src
+    # float 提供 [H]，用于把 figure 钉死在源码位置避免最后一张图独占空页
+    assert r"\usepackage{float}" in src
+    assert r"\begin{figure}[H]" in src
+
+
+# ---- _pad_math_commands: 分离黏在一起的 LaTeX 命令 ----
+
+def test_pad_math_commands_splits_cdot_stuck_to_letters():
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\cdotdist_{ij}$") == r"$\cdot\,dist_{ij}$"
+
+
+def test_pad_math_commands_splits_sum_stuck_to_exp():
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\sumexp(x)$") == r"$\sum\,exp(x)$"
+
+
+def test_pad_math_commands_leaves_legit_cdotp_alone():
+    """\cdotp 是合法命令名（不是 \cdot+p），不能拆。"""
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\cdotp$") == r"$\cdotp$"
+
+
+def test_pad_math_commands_leaves_trailing_subscript_alone():
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\alpha_i$") == r"$\alpha_i$"
+    assert _pad_math_commands(r"$\sum_{i=1}^n a_i$") == r"$\sum_{i=1}^n a_i$"
+
+
+def test_pad_math_commands_leaves_unknown_macro_alone():
+    """写手自定义宏 \myVar 无法判断，保持原样避免误伤。"""
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\myVar$") == r"$\myVar$"
+
+
+def test_pad_math_commands_skips_text_span():
+    from math_agent.nodes.latex import _pad_math_commands
+    # text 里的 \cdotdist 不动（外部 latex 自己处理，且 text 段通常已 escape）
+    assert _pad_math_commands("$\cdot$dist") == "$\cdot$dist"
+
+
+def test_pad_math_commands_covers_equation_block():
+    from math_agent.nodes.latex import _pad_math_commands
+    src = r"\begin{equation}\cdotdist_{ij}\end{equation}"
+    assert _pad_math_commands(src) == r"\begin{equation}\cdot\,dist_{ij}\end{equation}"
+
+
+def test_pad_math_commands_handles_multiple_in_one_span():
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$a\cdotb\cdotc$") == r"$a\cdot\,b\cdot\,c$"
+
+
+def test_prepare_section_pipeline_defuses_cdot_dist():
+    """端到端：_prepare_section 应把 writer 常见的 `$\cdot$dist_{ij}$`
+    最终产出可编译 tex（\cdot 与 dist 之间不粘）。"""
+    from math_agent.nodes.latex import _prepare_section
+    src = r"目标函数含 $\cdot$dist_{ij}$ 项。"
+    out = _prepare_section(src)
+    # 关键：不能出现 \cdotdist 这种被 xelatex halt-on-error 的序列
+    assert "cdotdist" not in out
+
+
+# ---- _truncate_caption: 图注在句末/短语边界收尾 ----
+
+def test_truncate_caption_short_input_unchanged():
+    from math_agent.nodes.latex import _truncate_caption
+    assert _truncate_caption("短标题", max_chars=55) == "短标题"
+
+
+def test_truncate_caption_cuts_at_period():
+    from math_agent.nodes.latex import _truncate_caption
+    src = "曲线整体呈下降趋势，表明成本增加。用户满意度下降需要更多调度支持保障"
+    # 位置 14 处有句号，落在 [12,20) 窗口内 → 应在句号处收尾
+    out = _truncate_caption(src, max_chars=20)
+    assert out == "曲线整体呈下降趋势，表明成本增加。", out
+
+
+def test_truncate_caption_falls_back_to_comma_when_no_period():
+    from math_agent.nodes.latex import _truncate_caption
+    src = "帕累托前沿图展示，调度方案权衡运营成本与用户满意度分析"
+    # 位置 7 有逗号但在 [15*0.6=9, 15) 窗口外；这里 max_chars=15 → [9,15) 无标点 → 硬截
+    # 换个例子：max_chars=10，窗口 [6,10) 有逗号在位置 7
+    out = _truncate_caption(src, max_chars=10)
+    assert out.endswith("，"), out
+
+
+def test_truncate_caption_hard_cut_when_no_boundary():
+    """全是数学符号 / 英文长词、找不到中文标点时退到硬截。"""
+    from math_agent.nodes.latex import _truncate_caption
+    src = "aaaabbbbccccddddeeeeffffgggghhhhiiiiijjjjkkkk"  # 45 字符
+    out = _truncate_caption(src, max_chars=20)
+    assert len(out) == 20
+
+
+# ---- _wrap_naked_subscripts 不应侵入 display math 块 ----
+
+def test_wrap_naked_subscripts_skips_display_math_brackets():
+    r"""`\[ ... d_{ij} ... \]` 是 display math，d_{ij} 已在 math mode，
+    不应再被包成 `$d_{ij}$` 嵌进 display math，否则 xelatex halt。"""
+    from math_agent.nodes.latex import _wrap_naked_subscripts
+    src = r"目标函数 \[ \min \sum_k d_{ij} x_{ijk} \] 是最小化。"
+    out = _wrap_naked_subscripts(src)
+    assert "$d_{ij}$" not in out, out
+    assert "$x_{ijk}$" not in out, out
+    # 但块外的 d_{ij} 仍应被包
+    assert r"\[ \min \sum_k d_{ij} x_{ijk} \]" in out
+
+
+def test_wrap_naked_subscripts_skips_equation_block():
+    from math_agent.nodes.latex import _wrap_naked_subscripts
+    src = r"如下：\begin{equation} \sum_k d_{ij} \end{equation} 结束。"
+    out = _wrap_naked_subscripts(src)
+    assert "$d_{ij}$" not in out
+    # 块外的 s_i 仍被包
+    src2 = r"前面 s_i 块 \begin{equation} \sum_k d_{ij} \end{equation} 后面 c_{ab}"
+    out2 = _wrap_naked_subscripts(src2)
+    assert "$s_i$" in out2
+    assert "$c_{ab}$" in out2
+    assert "$d_{ij}$" not in out2
+
+
+def test_wrap_naked_subscripts_skips_paren_display_math():
+    from math_agent.nodes.latex import _wrap_naked_subscripts
+    src = r"用 \( \sum_i x_{ij} \) 形式。"
+    out = _wrap_naked_subscripts(src)
+    assert "$x_{ij}$" not in out
+
+
+def test_prepare_section_defuses_nested_inline_in_display():
+    r"""端到端铁板钉钉：writer 常见 `\[ \min \sum ... d_{ij} x_{ijk} \]`
+    经过 _prepare_section 后不能含 `$d_{ij}$` 这种嵌套进 display math 的 $...$。"""
+    from math_agent.nodes.latex import _prepare_section
+    src = r"目标 \[ \min \sum\_{k} d_{ij} x_{ijk} \] 结束。"
+    out = _prepare_section(src)
+    # 修复前的症状：会变成 \[ \min \sum\_{k} $d_{ij}$ $x_{ijk}$ \]
+    assert "$d_{ij}$" not in out
+    assert "$x_{ijk}$" not in out

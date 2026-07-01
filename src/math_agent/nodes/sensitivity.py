@@ -85,12 +85,13 @@ def sensitivity_node(state: MathModelingState) -> dict:
     if not plan.runs:
         return {"errors": ["sensitivity: LLM 未给出可执行的 runs"]}
 
-    # 2) CODE+RUN（最多重试 MAX_CODE_RETRIES 次，与 coder 一致：失败 stderr 回灌 LLM）
+    # 2) CODE+RUN（最多重试 MAX_CODE_RETRIES 次，与 coder 一致：失败按 error_kind 分流）
     sandbox_result = None
     prev_err: str | None = None
+    prev_kind: str = ""
     for attempt in range(MAX_CODE_RETRIES + 1):
         code_out: SensitivityCode = complete(
-            build_code_prompt(final, [r.model_dump() for r in plan.runs], prev_err),
+            build_code_prompt(final, [r.model_dump() for r in plan.runs], prev_err, prev_kind),
             schema=SensitivityCode, system=CODE_SYSTEM,
             model=MODEL_ROUTING.get("coder"),
         )
@@ -100,6 +101,7 @@ def sensitivity_node(state: MathModelingState) -> dict:
         if sandbox_result.success:
             break
         prev_err = sandbox_result.stderr
+        prev_kind = sandbox_result.error_kind
     if not sandbox_result.success:
         return {"errors": [f"sensitivity: 扫参代码执行失败：{sandbox_result.stderr[:500]}"]}
 

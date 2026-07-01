@@ -12,12 +12,16 @@ class LatexResult:
     success: bool
     pdf_path: str = ""
     log: str = ""
+    error_kind: str = ""  # "" | "missing_binary" | "compile" | "timeout"
 
 
 def compile_latex(tex_path: str | Path, *, timeout: int = 120) -> LatexResult:
     tex_path = Path(tex_path)
     if shutil.which("xelatex") is None:
-        return LatexResult(success=False, log="xelatex not found on PATH")
+        return LatexResult(
+            success=False, log="xelatex not found on PATH",
+            error_kind="missing_binary",
+        )
 
     workdir = tex_path.parent
     try:
@@ -32,10 +36,19 @@ def compile_latex(tex_path: str | Path, *, timeout: int = 120) -> LatexResult:
             # coerce to '' to avoid TypeError in concat (same fix as tools/runner.py).
             log_acc.append((proc.stdout or "") + "\n" + (proc.stderr or ""))
             if proc.returncode != 0:
-                return LatexResult(success=False, log="\n".join(log_acc))
+                return LatexResult(
+                    success=False, log="\n".join(log_acc),
+                    error_kind="compile",
+                )
         pdf = workdir / (tex_path.stem + ".pdf")
         if not pdf.exists():
-            return LatexResult(success=False, log="\n".join(log_acc) + "\nno pdf produced")
+            return LatexResult(
+                success=False, log="\n".join(log_acc) + "\nno pdf produced",
+                error_kind="compile",
+            )
         return LatexResult(success=True, pdf_path=str(pdf), log="\n".join(log_acc))
     except subprocess.TimeoutExpired as e:
-        return LatexResult(success=False, log=f"timeout after {timeout}s: {e}")
+        return LatexResult(
+            success=False, log=f"timeout after {timeout}s: {e}",
+            error_kind="timeout",
+        )

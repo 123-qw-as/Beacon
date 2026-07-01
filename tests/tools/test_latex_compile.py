@@ -29,3 +29,11 @@ def test_compile_latex_returns_failure_when_xelatex_missing(monkeypatch, workdir
     res = compile_latex(tex)
     assert not res.success
     assert "xelatex" in res.log.lower()
+
+
+def test_latex_result_carries_error_kind_when_missing(monkeypatch, workdir):
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    tex = workdir / "main.tex"
+    tex.write_text(r"\documentclass{article}\begin{document}x\end{document}", encoding="utf-8")
+    res = compile_latex(tex)
+    assert res.error_kind == "missing_binary"
