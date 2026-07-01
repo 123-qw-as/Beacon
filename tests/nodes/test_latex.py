@@ -339,3 +339,60 @@ def test_default_paper_tex_template_declares_tabularx_and_booktabs():
     src = tpl.read_text(encoding="utf-8")
     assert r"\usepackage{tabularx}" in src
     assert r"\usepackage{booktabs}" in src
+
+
+# ---- _pad_math_commands: 分离黏在一起的 LaTeX 命令 ----
+
+def test_pad_math_commands_splits_cdot_stuck_to_letters():
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\cdotdist_{ij}$") == r"$\cdot\,dist_{ij}$"
+
+
+def test_pad_math_commands_splits_sum_stuck_to_exp():
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\sumexp(x)$") == r"$\sum\,exp(x)$"
+
+
+def test_pad_math_commands_leaves_legit_cdotp_alone():
+    """\cdotp 是合法命令名（不是 \cdot+p），不能拆。"""
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\cdotp$") == r"$\cdotp$"
+
+
+def test_pad_math_commands_leaves_trailing_subscript_alone():
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\alpha_i$") == r"$\alpha_i$"
+    assert _pad_math_commands(r"$\sum_{i=1}^n a_i$") == r"$\sum_{i=1}^n a_i$"
+
+
+def test_pad_math_commands_leaves_unknown_macro_alone():
+    """写手自定义宏 \myVar 无法判断，保持原样避免误伤。"""
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$\myVar$") == r"$\myVar$"
+
+
+def test_pad_math_commands_skips_text_span():
+    from math_agent.nodes.latex import _pad_math_commands
+    # text 里的 \cdotdist 不动（外部 latex 自己处理，且 text 段通常已 escape）
+    assert _pad_math_commands("$\cdot$dist") == "$\cdot$dist"
+
+
+def test_pad_math_commands_covers_equation_block():
+    from math_agent.nodes.latex import _pad_math_commands
+    src = r"\begin{equation}\cdotdist_{ij}\end{equation}"
+    assert _pad_math_commands(src) == r"\begin{equation}\cdot\,dist_{ij}\end{equation}"
+
+
+def test_pad_math_commands_handles_multiple_in_one_span():
+    from math_agent.nodes.latex import _pad_math_commands
+    assert _pad_math_commands(r"$a\cdotb\cdotc$") == r"$a\cdot\,b\cdot\,c$"
+
+
+def test_prepare_section_pipeline_defuses_cdot_dist():
+    """端到端：_prepare_section 应把 writer 常见的 `$\cdot$dist_{ij}$`
+    最终产出可编译 tex（\cdot 与 dist 之间不粘）。"""
+    from math_agent.nodes.latex import _prepare_section
+    src = r"目标函数含 $\cdot$dist_{ij}$ 项。"
+    out = _prepare_section(src)
+    # 关键：不能出现 \cdotdist 这种被 xelatex halt-on-error 的序列
+    assert "cdotdist" not in out
