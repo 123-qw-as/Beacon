@@ -37,6 +37,20 @@ def test_classify_transport_error():
     assert isinstance(out, LLMTransportError)
 
 
+def test_classify_5xx_and_connection_error_as_transport():
+    """本地 router 常见的 502/503/504 / Connection error / InternalServerError
+    都应当被视为 transport（会被 llm_retry 重试）。"""
+    cases = [
+        RuntimeError("litellm.InternalServerError: OpenAIException - Connection error."),
+        RuntimeError("Server error '502 Bad Gateway' for url 'http://x/embed'"),
+        RuntimeError("HTTP 503 Service Unavailable"),
+        RuntimeError("504 Gateway Timeout"),
+    ]
+    for e in cases:
+        out = classify_exception(e)
+        assert isinstance(out, LLMTransportError), f"{e} -> {type(out).__name__}"
+
+
 def test_classify_unknown_passes_through_as_llmerror():
     e = RuntimeError("boom")
     out = classify_exception(e)

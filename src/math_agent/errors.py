@@ -66,7 +66,12 @@ class LatexCompileError(LatexError):
 
 
 _RATE_LIMIT_HINTS = ("RateLimitError", "rate limit", "429")
-_TRANSPORT_HINTS = ("APIConnectionError", "Timeout", "ReadTimeout", "ConnectionError")
+_TRANSPORT_HINTS = (
+    "APIConnectionError", "Timeout", "ReadTimeout", "ConnectionError",
+    "Connection error",         # litellm/openai passes this in the message body
+    "InternalServerError",      # 5xx from upstream router / gateway
+    "ServiceUnavailable", "502", "503", "504",
+)
 
 
 def classify_exception(e: BaseException) -> MathAgentError:
