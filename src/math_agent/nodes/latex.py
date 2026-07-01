@@ -252,9 +252,14 @@ def _md_inline_code_to_math(s: str) -> str:
 def _wrap_naked_subscripts(s: str) -> str:
     """把行内裸的 LaTeX 下标/上标自动包成 $...$。
 
-    覆盖 writer RULE 4 没治住的 `D_i`、`c_{ij}`、`S_i^{(1)}`、`λ_i^net`。
+    覆盖 writer RULE 4 治不住的 `D_i`、`c_{ij}`、`S_i^{(1)}`、`λ_i^net`。
     跳过已在 $...$ 内、跳过 \\command 前缀（避免动 \\paragraph{w\\_RF}）。
     若 token 内含 unicode 数学字符（λ/σ 等），同步展开为 LaTeX 命令。
+
+    还要**跳过 display math 块**：`\\[...\\]`、`\\(...\\)`、
+    `\\begin{equation}...\\end{equation}`。这些已经是 math mode，再往里嵌 `$...$`
+    会触发 'Display math should end with $$' halt。writer 写
+    `\\[ \\min \\sum_k d_{ij} x_{ijk} \\]` 时，d_{ij} 不该被再包成 $d_{ij}$。
 
     已知 over-wrap 风险：`a_b_c` 这种合法变量名也会被当数学。但 paper 段里
     几乎不会出现，且即便错伤，渲出来仍是合法 LaTeX（math italic 显示）。
@@ -269,10 +274,29 @@ def _wrap_naked_subscripts(s: str) -> str:
                 content = content.replace(ch, cmd)
         return f"${content}$"
 
-    parts = s.split("$")
-    for i in range(0, len(parts), 2):
-        parts[i] = _NAKED_SUB_RE.sub(_sub, parts[i])
-    return "$".join(parts)
+    def _process_text(t: str) -> str:
+        # 已是 display/inline math span 切分后的 text 段：只用 $ 切分跳 inline
+        parts = t.split("$")
+        for i in range(0, len(parts), 2):
+            parts[i] = _NAKED_SUB_RE.sub(_sub, parts[i])
+        return "$".join(parts)
+
+    # 先按 display/inline math 块切分；块内 (display) 不动，偶数段 (text) 内继续按 $ 切
+    # 兼容：\[ ... \]、\( ... \)、\begin{equation} ... \end{equation}
+    display_re = re.compile(
+        r"(\\\[.*?\\\]|\\\(.*?\\\)|\\begin\{equation\*?\}.*?\\end\{equation\*?\})",
+        re.DOTALL,
+    )
+    out = []
+    last = 0
+    for m in display_re.finditer(s):
+        # 块前 text 段
+        out.append(_process_text(s[last:m.start()]))
+        # 块内原样保留
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_process_text(s[last:]))
+    return "".join(out)
 
 
 # ===== Markdown 排版 → LaTeX 命令 =====

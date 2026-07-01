@@ -431,3 +431,48 @@ def test_truncate_caption_hard_cut_when_no_boundary():
     src = "aaaabbbbccccddddeeeeffffgggghhhhiiiiijjjjkkkk"  # 45 字符
     out = _truncate_caption(src, max_chars=20)
     assert len(out) == 20
+
+
+# ---- _wrap_naked_subscripts 不应侵入 display math 块 ----
+
+def test_wrap_naked_subscripts_skips_display_math_brackets():
+    r"""`\[ ... d_{ij} ... \]` 是 display math，d_{ij} 已在 math mode，
+    不应再被包成 `$d_{ij}$` 嵌进 display math，否则 xelatex halt。"""
+    from math_agent.nodes.latex import _wrap_naked_subscripts
+    src = r"目标函数 \[ \min \sum_k d_{ij} x_{ijk} \] 是最小化。"
+    out = _wrap_naked_subscripts(src)
+    assert "$d_{ij}$" not in out, out
+    assert "$x_{ijk}$" not in out, out
+    # 但块外的 d_{ij} 仍应被包
+    assert r"\[ \min \sum_k d_{ij} x_{ijk} \]" in out
+
+
+def test_wrap_naked_subscripts_skips_equation_block():
+    from math_agent.nodes.latex import _wrap_naked_subscripts
+    src = r"如下：\begin{equation} \sum_k d_{ij} \end{equation} 结束。"
+    out = _wrap_naked_subscripts(src)
+    assert "$d_{ij}$" not in out
+    # 块外的 s_i 仍被包
+    src2 = r"前面 s_i 块 \begin{equation} \sum_k d_{ij} \end{equation} 后面 c_{ab}"
+    out2 = _wrap_naked_subscripts(src2)
+    assert "$s_i$" in out2
+    assert "$c_{ab}$" in out2
+    assert "$d_{ij}$" not in out2
+
+
+def test_wrap_naked_subscripts_skips_paren_display_math():
+    from math_agent.nodes.latex import _wrap_naked_subscripts
+    src = r"用 \( \sum_i x_{ij} \) 形式。"
+    out = _wrap_naked_subscripts(src)
+    assert "$x_{ij}$" not in out
+
+
+def test_prepare_section_defuses_nested_inline_in_display():
+    r"""端到端铁板钉钉：writer 常见 `\[ \min \sum ... d_{ij} x_{ijk} \]`
+    经过 _prepare_section 后不能含 `$d_{ij}$` 这种嵌套进 display math 的 $...$。"""
+    from math_agent.nodes.latex import _prepare_section
+    src = r"目标 \[ \min \sum\_{k} d_{ij} x_{ijk} \] 结束。"
+    out = _prepare_section(src)
+    # 修复前的症状：会变成 \[ \min \sum\_{k} $d_{ij}$ $x_{ijk}$ \]
+    assert "$d_{ij}$" not in out
+    assert "$x_{ijk}$" not in out
