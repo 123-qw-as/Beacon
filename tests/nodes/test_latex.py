@@ -328,3 +328,14 @@ def test_latex_node_figure_caption_truncated(mocker, workdir):
     import re
     m = re.search(r"\\caption\{([^}]+)\}", tex)
     assert m and len(m.group(1)) <= 56  # +1 容忍尾标点
+
+
+def test_default_paper_tex_template_declares_tabularx_and_booktabs():
+    """回归：_md_table_to_latex 会吐 \begin{tabularx}{...}{X X X} + \toprule/\midrule/\bottomrule；
+    default 模板 preamble 必须引入这两个包，否则含表格的 markdown 编译失败（Plan C 首次 RAG 跑复现）。"""
+    from pathlib import Path
+    tpl = (Path(__file__).resolve().parent.parent.parent
+           / "src" / "math_agent" / "templates" / "paper.tex.j2")
+    src = tpl.read_text(encoding="utf-8")
+    assert r"\usepackage{tabularx}" in src
+    assert r"\usepackage{booktabs}" in src
