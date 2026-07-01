@@ -486,19 +486,40 @@ def _prepare_section(s: str) -> str:
     return s
 
 
+def _truncate_caption(s: str, *, max_chars: int = 55) -> str:
+    """把长图注截到 max_chars 以内，但优先切在完整句/短语边界。
+
+    LLM 写的图 caption 常常两三个句子；直接 `s[:55]` 会切在逗号/单字上（"…成本增加，"、"…前"）。
+    策略：先看 max_chars 处是否已是终结符；否则在 [max_chars*0.6, max_chars] 内找最靠后的
+    句末字符（。！？；.!?）；没有则退到最靠后的逗号（，、,）；再退不到就硬截。
+    """
+    if not s or len(s) <= max_chars:
+        return s
+    hard_end = s[max_chars - 1]
+    if hard_end in "。！？；.!?":
+        return s[:max_chars]
+    lo = max(1, int(max_chars * 0.6))
+    window = s[lo:max_chars]
+    for stops in ("。！？；.!?", "，、,"):
+        idx = max((window.rfind(c) for c in stops), default=-1)
+        if idx != -1:
+            return s[: lo + idx + 1]
+    return s[:max_chars]
+
+
 def latex_node(state: MathModelingState) -> dict:
     workdir = Path(state.output_dir or ".")
     workdir.mkdir(parents=True, exist_ok=True)
 
     # ponytail: 为图重打一份 LaTeX 安全视图，避免 caption/path 里的 _/&/% 炸编译
-    # caption 限到约 55 字（包含完整结尾标点）
+    # caption 尽量截到最近的句/短语边界，避免"曲线呈下降趋势，"这种半截逗号结尾
     # analysis 走完整 _prepare_section（v8 实测：figure_pipeline LLM 在图说里
     # 会写 sensitivity_capacity.png 这种文件名，必须 escape）
     safe_figures = [
         FigureArtifact(
             path=_latex_path(f.path),
             purpose=_latex_escape(f.purpose),
-            caption=_latex_escape((f.caption or f.purpose)[:55]),
+            caption=_latex_escape(_truncate_caption(f.caption or f.purpose, max_chars=55)),
             quality_score=f.quality_score,
             quality_issues=list(f.quality_issues),
             analysis=_prepare_section(f.analysis),
