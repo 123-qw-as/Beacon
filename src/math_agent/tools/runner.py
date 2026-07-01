@@ -5,8 +5,12 @@
 - 超时强杀
 - 清空环境变量（仅传递最小 PATH / PYTHONPATH / SystemRoot），避免顺手读到 OPENAI_API_KEY 之类。
 
-真正的隔离要靠 docker/firejail/nsjail，放 Plan C。
-仅在本机可信使用前提下使用本模块。
+**为什么不接 docker/firejail/nsjail**（Plan C 复盘决定）：
+- 威胁模型：单用户本机跑，配置好的 LLM（DeepSeek / GLM 等）没有主动越狱动机
+- 已有防护够用：minimal env 防了 API key 泄露，tempdir + timeout 挡住大部分误伤
+- docker 边际成本：镜像+依赖打包、每次调用多 3-5s 冷启、Windows Docker Desktop 资源占用
+- **换来的边际安全在本使用场景下近乎为零** → 主动 skip，不做过度工程
+- 使用前提：仅在本机可信环境使用。多租户/云部署另议。
 """
 from __future__ import annotations
 

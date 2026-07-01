@@ -50,3 +50,60 @@ def test_coder_records_error_when_all_retries_fail(mocker, workdir):
     assert all(a.success is False for a in delta["code_artifacts"])
     assert "errors" in delta and delta["errors"]
     assert delta["errors"][0].startswith("coder:")
+
+
+def test_coder_prompt_on_timeout_asks_to_shrink_scale(mocker, workdir):
+    """attempt_0 超时时，attempt_1 的 prompt 应命中"缩小规模"提示而不是喂 stderr 修 bug。"""
+    from math_agent.tools.runner import RunResult
+    from unittest.mock import call
+
+    drafts = [
+        CoderDraft(purpose="s", code="import time; time.sleep(999)"),
+        CoderDraft(purpose="s", code="print('ok')"),
+    ]
+    spy_complete = mocker.patch("math_agent.nodes.coder.complete", side_effect=drafts)
+    # 第一次跑成 timeout，第二次跑成成功——不让真 subprocess 跑
+    mocker.patch(
+        "math_agent.nodes.coder.run_python",
+        side_effect=[
+            RunResult(success=False, stderr="timeout after 300s", error_kind="timeout"),
+            RunResult(success=True, stdout="ok", error_kind=""),
+        ],
+    )
+
+    s = MathModelingState(problem="p", output_dir=str(workdir))
+    s.model_versions.append(ModelVersion(stage="final", description="d"))
+    coder_node(s)
+
+    # 第 2 次 complete 的 prompt 应含"缩小"关键词，不含"stderr 节选"
+    second_prompt = spy_complete.call_args_list[1].args[0]
+    assert "缩小" in second_prompt
+    assert "stderr 节选" not in second_prompt
+
+
+def test_coder_prompt_on_runtime_asks_to_fix_via_stderr(mocker, workdir):
+    """attempt_0 runtime 失败时，attempt_1 的 prompt 应喂 stderr 让 LLM 修 bug。"""
+    from math_agent.tools.runner import RunResult
+
+    drafts = [
+        CoderDraft(purpose="s", code="raise ValueError('boom')"),
+        CoderDraft(purpose="s", code="print('ok')"),
+    ]
+    spy_complete = mocker.patch("math_agent.nodes.coder.complete", side_effect=drafts)
+    mocker.patch(
+        "math_agent.nodes.coder.run_python",
+        side_effect=[
+            RunResult(success=False, stderr="Traceback ... ValueError: boom",
+                      error_kind="runtime"),
+            RunResult(success=True, stdout="ok", error_kind=""),
+        ],
+    )
+
+    s = MathModelingState(problem="p", output_dir=str(workdir))
+    s.model_versions.append(ModelVersion(stage="final", description="d"))
+    coder_node(s)
+
+    second_prompt = spy_complete.call_args_list[1].args[0]
+    assert "stderr 节选" in second_prompt
+    assert "ValueError: boom" in second_prompt
+    assert "缩小" not in second_prompt

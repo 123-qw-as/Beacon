@@ -25,9 +25,10 @@ def coder_node(state: MathModelingState) -> dict:
 
     artifacts: list[CodeArtifact] = []
     prev_err: str | None = None
+    prev_kind: str = ""
     for attempt in range(MAX_CODE_RETRIES + 1):
         draft: CoderDraft = complete(
-            build_prompt(model, prev_err),
+            build_prompt(model, prev_err, prev_kind),
             schema=CoderDraft,
             system=SYSTEM,
             model=MODEL_ROUTING["coder"],
@@ -46,6 +47,7 @@ def coder_node(state: MathModelingState) -> dict:
         if result.success:
             break
         prev_err = result.stderr
+        prev_kind = result.error_kind
 
     delta: dict = {"code_artifacts": artifacts}
     if not any(a.success for a in artifacts):

@@ -83,3 +83,79 @@ def test_sensitivity_retries_after_failure_then_succeeds(mocker, workdir):
     assert delta.get("errors") is None or "sensitivity:" not in str(delta.get("errors", ""))
     assert len(delta["sensitivity_runs"]) == 1
     assert delta["sensitivity_runs"][0].results == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_sensitivity_prompt_on_timeout_asks_to_shrink(mocker, workdir):
+    """attempt_0 扫参超时时，attempt_1 的 code prompt 应命中"缩小规模"，而非"stderr 节选"。"""
+    from math_agent.tools.runner import RunResult
+
+    plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [0.5, 1, 1.5, 2, 2.5],
+                                  "metric": "y", "rationale": "r"}])
+    ok_code = SensitivityCode(code=(
+        "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+        "vals=[1,2,3]; res=[v*2 for v in vals]\n"
+        "plt.plot(vals,res); plt.savefig('lambda.png')\n"
+        "print(f'RESULT: parameter=lambda values={vals} results={res}')\n"
+    ))
+    interp = Interpretations(interpretations=["ok"])
+    spy = mocker.patch("math_agent.nodes.sensitivity.complete",
+                       side_effect=[plan, ok_code, ok_code, interp])
+
+    # 第 1 次 run_python 超时，第 2 次成功
+    from unittest.mock import patch
+    real = None
+    call_i = {"n": 0}
+
+    def _fake_run(code, *, workdir, timeout):
+        call_i["n"] += 1
+        if call_i["n"] == 1:
+            return RunResult(success=False, stderr="timeout after 300s",
+                             error_kind="timeout")
+        # 第 2 次调真的跑，让 stdout parseable
+        from math_agent.tools.runner import run_python as _rp
+        return _rp(code, workdir=workdir, timeout=timeout)
+
+    mocker.patch("math_agent.nodes.sensitivity.run_python", side_effect=_fake_run)
+
+    sensitivity_node(_ok_state(workdir))
+
+    # complete 调用顺序：plan(0) → code attempt0(1) → code attempt1(2) → interpret(3)
+    second_code_prompt = spy.call_args_list[2].args[0]
+    assert "缩小扫参规模" in second_code_prompt
+    assert "stderr 节选" not in second_code_prompt
+
+
+def test_sensitivity_prompt_on_runtime_feeds_stderr(mocker, workdir):
+    """attempt_0 runtime 失败时，attempt_1 的 prompt 应喂 stderr。"""
+    from math_agent.tools.runner import RunResult
+
+    plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [0.5, 1, 1.5, 2, 2.5],
+                                  "metric": "y", "rationale": "r"}])
+    ok_code = SensitivityCode(code=(
+        "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+        "vals=[1,2,3]; res=[v*2 for v in vals]\n"
+        "plt.plot(vals,res); plt.savefig('lambda.png')\n"
+        "print(f'RESULT: parameter=lambda values={vals} results={res}')\n"
+    ))
+    interp = Interpretations(interpretations=["ok"])
+    spy = mocker.patch("math_agent.nodes.sensitivity.complete",
+                       side_effect=[plan, ok_code, ok_code, interp])
+
+    call_i = {"n": 0}
+
+    def _fake_run(code, *, workdir, timeout):
+        call_i["n"] += 1
+        if call_i["n"] == 1:
+            return RunResult(success=False,
+                             stderr="Traceback ... ZeroDivisionError: x",
+                             error_kind="runtime")
+        from math_agent.tools.runner import run_python as _rp
+        return _rp(code, workdir=workdir, timeout=timeout)
+
+    mocker.patch("math_agent.nodes.sensitivity.run_python", side_effect=_fake_run)
+
+    sensitivity_node(_ok_state(workdir))
+    second_code_prompt = spy.call_args_list[2].args[0]
+    assert "stderr 节选" in second_code_prompt
+    assert "ZeroDivisionError" in second_code_prompt
+    assert "缩小扫参规模" not in second_code_prompt
