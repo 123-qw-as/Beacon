@@ -23,14 +23,19 @@ def _advance_stage(state: MathModelingState) -> dict:
 
 
 def _wrap(fn, name: str):
-    """如当前 contextvar 上有 Tracer，按节点名打点；没有则原样调用。"""
+    """如当前 contextvar 上有 Tracer，按节点名打点；没有则原样调用。
+    同时设置 _last_node_name contextvar 供 CLI 报错时显示当前节点。"""
     def _inner(s):
-        from math_agent.tracing import get_current
-        tracer = get_current()
-        if tracer is not None:
-            with tracer.node(name):
-                return fn(s)
-        return fn(s)
+        from math_agent.tracing import get_current, set_last_node, reset_last_node
+        tok = set_last_node(name)
+        try:
+            tracer = get_current()
+            if tracer is not None:
+                with tracer.node(name):
+                    return fn(s)
+            return fn(s)
+        finally:
+            reset_last_node(tok)
     _inner.__name__ = fn.__name__
     return _inner
 

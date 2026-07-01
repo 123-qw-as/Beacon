@@ -17,7 +17,8 @@ from rich.table import Table
 
 from math_agent.graph import build_graph
 from math_agent.state import HumanDecision
-from math_agent.tracing import Tracer, set_current, reset_current
+from math_agent.errors import LLMError, LLMRateLimitError, LLMTransportError
+from math_agent.tracing import Tracer, get_last_node, set_current, reset_current
 
 
 app = typer.Typer(help="Math modeling multi-agent system.")
@@ -43,7 +44,20 @@ def run(
     school: str = typer.Option("", help="学校名称（gmcm 模板用）"),
     team_id: str = typer.Option("", help="参赛报名号（gmcm 模板用）"),
     members: str = typer.Option("", help="队员名字，逗号分隔：'张三,李四,王五'（gmcm 模板用）"),
+    force: bool = typer.Option(False, "--force", help="即使已有 checkpoint 也覆盖（慎用）"),
 ):
+    # 防止以同一 --thread 重复输出到同一目录，掩盖上次 runs
+    out.mkdir(parents=True, exist_ok=True)
+    chk = out / "checkpoints.sqlite"
+    if chk.exists() and not force:
+        typer.echo(
+            f"Output dir {out} already has a checkpoint (thread={thread}).\n"
+            f"  - Use a different --out or a different --thread to start a fresh run.\n"
+            f"  - Or append --force to overwrite the existing run.\n"
+            f"  - Or use `resume` to continue the existing run.",
+            err=True,
+        )
+        raise typer.Exit(1)
     spec = json.loads(problem.read_text(encoding="utf-8"))
     interrupt = [] if no_interrupt else ["human_review"]
 
@@ -65,6 +79,25 @@ def run(
         with _saver_cm(out) as saver:
             g = build_graph(checkpointer=saver, interrupt_before=interrupt)
             g.invoke(initial, config=_config(thread))
+    except LLMTransportError as e:
+        typer.echo(f"\n[FAILED] LLM transport error at node '{get_last_node()}': {e}", err=True)
+        typer.echo(f"  Checkpoint saved (thread={thread}). Router may be temporarily unavailable.", err=True)
+        typer.echo(f"  Resume: python -m math_agent.cli resume --out {out} --thread {thread} --approve", err=True)
+        typer.echo(f"  Or: python -m math_agent.cli run ... --out {out} --thread {thread}")
+        raise typer.Exit(1)
+    except LLMRateLimitError as e:
+        typer.echo(f"\n[FAILED] Rate limit exhausted at node '{get_last_node()}': {e}", err=True)
+        typer.echo(f"  Retry budget used up. Wait and resume:", err=True)
+        typer.echo(f"  python -m math_agent.cli resume --out {out} --thread {thread} --approve")
+        raise typer.Exit(1)
+    except LLMError as e:
+        typer.echo(f"\n[FAILED] LLM error at node '{get_last_node()}': {e}", err=True)
+        typer.echo(f"  Checkpoint saved (thread={thread}). This error may not be retriable.", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"\n[FAILED] Unexpected error: {type(e).__name__}: {e}", err=True)
+        typer.echo(f"  Checkpoint saved (thread={thread}). Debug trace at {out / 'trace.json'}")
+        raise typer.Exit(1)
     finally:
         tracer.flush()
         reset_current(tok)

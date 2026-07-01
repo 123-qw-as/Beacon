@@ -96,3 +96,22 @@ def get_current() -> "Tracer | None":
 
 def reset_current(token: contextvars.Token) -> None:
     _current.reset(token)
+
+
+# ---- 全局最后节点名（供 CLI 报错时显示） ----
+
+_last_node: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "math_agent_last_node", default="(unknown)",
+)
+
+
+def set_last_node(name: str) -> contextvars.Token:
+    return _last_node.set(name)
+
+
+def get_last_node() -> str:
+    return _last_node.get()
+
+
+def reset_last_node(token: contextvars.Token) -> None:
+    _last_node.reset(token)
