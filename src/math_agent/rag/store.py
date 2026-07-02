@@ -27,6 +27,8 @@ class StoredChunk:
     source: str
     index: int
     score: float
+    source_type: str = ""
+    section: str = ""
 
 
 def _content_hash(text: str) -> str:
@@ -63,6 +65,8 @@ class VectorStore:
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "text TEXT NOT NULL, source TEXT NOT NULL, idx INTEGER NOT NULL, "
             "content_hash TEXT NOT NULL, "
+            "source_type TEXT NOT NULL DEFAULT '', "
+            "section TEXT NOT NULL DEFAULT '', "
             "UNIQUE(source, content_hash))"
         )
         if old_db and not _has_column(conn, "chunks", "content_hash"):
@@ -73,6 +77,14 @@ class VectorStore:
                 "建议删除该库后重新 ingest 以启用去重。",
                 stacklevel=2,
             )
+        # ponytail: 同形态迁移 source_type/section。旧库这两列为空，
+        # writer 过滤 source_type="paper" 会跳过它们 → retrieve fallback 兜回全库。
+        # 想精确过滤需重新 ingest。短章节不合并，min-size 视实测再加。
+        for col in ("source_type", "section"):
+            if old_db and not _has_column(conn, "chunks", col):
+                conn.execute(
+                    f"ALTER TABLE chunks ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+                )
         conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0("
             f"id INTEGER PRIMARY KEY, embedding float[{dim}])"
@@ -118,9 +130,9 @@ class VectorStore:
             # 歧义（rowcount 在 RETURNING 模式下恒为 0）更稳。
             try:
                 cur.execute(
-                    "INSERT INTO chunks(text, source, idx, content_hash) "
-                    "VALUES (?, ?, ?, ?) RETURNING id",
-                    (c.text, c.source, c.index, ch),
+                    "INSERT INTO chunks(text, source, idx, content_hash, source_type, section) "
+                    "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+                    (c.text, c.source, c.index, ch, c.source_type, c.section),
                 )
                 rowid = cur.fetchone()[0]
                 new_count += 1
@@ -132,18 +144,25 @@ class VectorStore:
         self._conn.commit()
         return new_count
 
-    def search(self, query: list[float], *, k: int = 5) -> list[StoredChunk]:
+    def search(self, query: list[float], *, k: int = 5,
+               source_type: str | None = None) -> list[StoredChunk]:
         if len(query) != self._dim:
             raise ValueError(f"query dim {len(query)} != store dim {self._dim}")
         # sqlite-vec 0.1.x KNN 查询要求显式 `k = ?` 约束（LIMIT 单独不够）。
+        where = "WHERE v.embedding MATCH ? AND k = ?"
+        params: list = [_to_blob(query), k]
+        if source_type is not None:
+            where += " AND c.source_type = ?"
+            params.append(source_type)
         cur = self._conn.execute(
-            "SELECT v.id, c.text, c.source, c.idx, v.distance "
+            "SELECT v.id, c.text, c.source, c.idx, v.distance, c.source_type, c.section "
             "FROM vec_chunks v JOIN chunks c ON c.id = v.id "
-            "WHERE v.embedding MATCH ? AND k = ? ORDER BY v.distance",
-            (_to_blob(query), k),
+            f"{where} ORDER BY v.distance",
+            params,
         )
         return [
-            StoredChunk(id=row[0], text=row[1], source=row[2], index=row[3], score=row[4])
+            StoredChunk(id=row[0], text=row[1], source=row[2], index=row[3],
+                        score=row[4], source_type=row[5], section=row[6])
             for row in cur
         ]
 

@@ -80,3 +80,50 @@ def test_store_open_persists_dim_across_reopen(workdir):
     hits = s2.search([1.0, 0.0, 0.0], k=1)
     assert hits[0].text == "x"
     s2.close()
+
+
+def test_store_search_filters_by_source_type(workdir):
+    """source_type 过滤：只返回匹配类型的 chunk。"""
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.add(
+        chunks=[Chunk(text="paper 片段", source="p.md", index=0, source_type="paper")],
+        embeddings=[[1.0, 0.0, 0.0]],
+    )
+    store.add(
+        chunks=[Chunk(text="model 片段", source="m.md", index=0, source_type="model_lib")],
+        embeddings=[[0.0, 1.0, 0.0]],
+    )
+    hits = store.search([1.0, 0.0, 0.0], k=10, source_type="paper")
+    assert len(hits) == 1
+    assert hits[0].source_type == "paper"
+    store.close()
+
+
+def test_store_search_no_filter_returns_all(workdir):
+    """不传 source_type → 全返回（向后兼容）。"""
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.add(
+        chunks=[Chunk(text="a", source="p.md", index=0, source_type="paper")],
+        embeddings=[[1.0, 0.0, 0.0]],
+    )
+    store.add(
+        chunks=[Chunk(text="b", source="m.md", index=0, source_type="model_lib")],
+        embeddings=[[0.0, 1.0, 0.0]],
+    )
+    hits = store.search([1.0, 0.0, 0.0], k=10)
+    assert len(hits) == 2
+    store.close()
+
+
+def test_store_add_persists_metadata(workdir):
+    """add 后 search，StoredChunk.source_type/section 正确。"""
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.add(
+        chunks=[Chunk(text="x", source="s", index=0,
+                      source_type="model_lib", section="适用场景")],
+        embeddings=[[1.0, 0.0, 0.0]],
+    )
+    hits = store.search([1.0, 0.0, 0.0], k=1)
+    assert hits[0].source_type == "model_lib"
+    assert hits[0].section == "适用场景"
+    store.close()
