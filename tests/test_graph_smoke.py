@@ -4,12 +4,13 @@ from pathlib import Path
 from math_agent.graph import build_graph
 from math_agent.state import (
     Assumption, ModelVersion, CriticReport, CriticIssue, PaperSections,
-    SensitivityRun, FigureArtifact, EvaluationReport, HumanDecision,
+    EvaluationReport, HumanDecision, DerivationStep,
 )
 from math_agent.nodes.analyst import AnalystOutput
 from math_agent.nodes.coder import CoderDraft
 from math_agent.nodes.sensitivity import SensitivityPlan, SensitivityCode, Interpretations
 from math_agent.nodes.figure_pipeline import FigureCriticOut, FigureAnalysisOut
+from math_agent.prompts.modeler_derivation import ConsistencyCheck
 
 
 def _png(p: Path):
@@ -25,8 +26,19 @@ def _full_mocks(mocker, workdir, *, stages=("basic", "improved", "final"), criti
                      Assumption(statement="A", rationale="r", sensitivity_relevant=True)]))
 
     stage_iter = iter(stages)
-    mocker.patch("math_agent.nodes.modeler.complete",
-                 side_effect=lambda *a, **k: ModelVersion(stage=next(stage_iter), description="d"*200))
+
+    def _modeler_complete(prompt, *, schema, **kw):
+        # final 阶段会额外调用 derivation steps + consistency gate，
+        # 需按请求的 schema 返回正确类型，否则解析出错。
+        if schema is ModelVersion:
+            return ModelVersion(stage=next(stage_iter), description="d" * 200)
+        if schema is DerivationStep:
+            return DerivationStep(title="step", motivation="m", statement="s", result="r")
+        if schema is ConsistencyCheck:
+            return ConsistencyCheck(coherent=True, issues=[])
+        return ModelVersion(stage="basic", description="d" * 200)
+
+    mocker.patch("math_agent.nodes.modeler.complete", side_effect=_modeler_complete)
 
     crit_iter = iter(critics) if critics else None
     if crit_iter is not None:
