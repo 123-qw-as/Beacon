@@ -77,6 +77,25 @@ class VectorStore:
             f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0("
             f"id INTEGER PRIMARY KEY, embedding float[{dim}])"
         )
+        # meta 表持久化 embedding 维度：open 时校验调用方 dim 与库内一致，
+        # 不等即报错。防止 vec0 表 CREATE IF NOT EXISTS 静默忽略 dim 差异
+        # 导致后续 add/search 维度校验全错的 footgun。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        row = conn.execute("SELECT value FROM meta WHERE key='dim'").fetchone()
+        if row is None:
+            # ponytail: 旧库（有 vec_chunks 但无 meta）首次 open 时把调用方 dim
+            # 写入并锁定。若首次传错 dim，后续 add/search 会立即报维度不匹配，
+            # 用户第一时间发现——可接受的取舍。
+            conn.execute("INSERT INTO meta(key, value) VALUES ('dim', ?)", (str(dim),))
+        elif int(row[0]) != dim:
+            conn.close()
+            raise ValueError(
+                f"store dim {row[0]} != requested {dim}; "
+                "检查 --dim 或环境变量 MATH_AGENT_RAG_DIM，"
+                "或删除该库用正确维度重建。"
+            )
         conn.commit()
         return cls(conn, dim)
 
