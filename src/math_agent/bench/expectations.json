@@ -10,5 +10,14 @@
     "must_contain_keywords": ["内涝", "排水", "风险"],
     "must_have_sensitivity": true,
     "must_have_figures": true
+  },
+  "v10_sample": {
+    "min_overall": 6.5,
+    "min_code_artifacts_total": 5,
+    "min_code_artifacts_success": 3,
+    "min_figures": 5,
+    "min_derivation_steps": 4,
+    "min_references": 5,
+    "max_paper_critic_issues": 3
   }
 }
