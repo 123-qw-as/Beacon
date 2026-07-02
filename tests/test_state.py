@@ -116,3 +116,8 @@ def test_derivation_step_carries_step_metadata():
     )
     assert d.title == "参数估计"
     assert d.motivation.startswith("为何")
+    assert d.statement == "对数似然 \\ell(\\theta)=..."
+    assert d.result == "\\hat\\theta = ..."
+    assert d.result.startswith("\\hat")
+    assert d.statement == "对数似然 \\ell(\\theta)=..."
+    assert d.result == "\\hat\\theta = ..."
