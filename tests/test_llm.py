@@ -124,3 +124,54 @@ def test_resolve_callback_names_includes_langsmith_when_env_set(monkeypatch):
     monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     assert _resolve_callback_names() == ["langsmith"]
+
+
+def test_complete_passes_timeout_to_litellm(mocker):
+    """llm.complete 必须给 litellm.completion 传 timeout，防 httpx 无限阻塞。"""
+    import httpx
+    from math_agent.config import LLM_TIMEOUT
+
+    captured = {}
+
+    def _fake(*args, **kw):
+        captured["kw"] = kw
+        return mocker.MagicMock(
+            choices=[mocker.MagicMock(message=mocker.MagicMock(content="ok"))]
+        )
+
+    mocker.patch("litellm.completion", side_effect=_fake)
+    llm.complete("hi", model="gpt-4o-mini")
+    assert captured["kw"].get("timeout") == LLM_TIMEOUT
+
+
+def test_timeout_is_classified_as_transport_and_retried(mocker):
+    """litellm 抛 httpx.TimeoutException → 应 classify 为 LLMTransportError → 走 tenacity 重试。"""
+    import httpx
+
+    timeout_err = httpx.TimeoutException("Read timed out")
+    ok = mocker.MagicMock(
+        choices=[mocker.MagicMock(message=mocker.MagicMock(content="ok"))]
+    )
+    mock_completion = mocker.patch(
+        "litellm.completion", side_effect=[timeout_err, ok]
+    )
+    out = llm.complete(
+        "hi", model="gpt-4o-mini",
+        _retry_attempts=3, _retry_base_delay=0,
+    )
+    assert out == "ok"
+    # 第一次超时 + 第二次成功 = 至少 2 次调用，证明 timeout 被纳入重试链
+    assert mock_completion.call_count >= 2
+
+
+def test_timeout_exhausts_retries_raises_transport_error(mocker):
+    """连续超时超过重试预算 → 抛 LLMError（且底层是 LLMTransportError 语义）。"""
+    import httpx
+    from math_agent.errors import LLMError, LLMTransportError
+
+    mocker.patch("litellm.completion", side_effect=httpx.TimeoutException("stalled"))
+    with pytest.raises(LLMError):
+        llm.complete(
+            "hi", model="gpt-4o-mini", max_retries=0,
+            _retry_attempts=2, _retry_base_delay=0,
+        )

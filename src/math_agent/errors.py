@@ -71,6 +71,8 @@ _TRANSPORT_HINTS = (
     "Connection error",         # litellm/openai passes this in the message body
     "InternalServerError",      # 5xx from upstream router / gateway
     "ServiceUnavailable", "502", "503", "504",
+    "httpx.TimeoutException",   # litellm 完全层透传 httpx 读/连接超时
+    "APITimeoutError",          # openai SDK 包装的 TimeoutExpired
 )
 
 

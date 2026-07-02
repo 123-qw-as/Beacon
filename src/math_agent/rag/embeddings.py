@@ -4,13 +4,16 @@ from __future__ import annotations
 # 继承 llm.py 模块级一次性抑制（LiteLLM logger / debug info 已在 llm 模块导入时设好）
 import litellm
 
+from math_agent.config import EMBED_TIMEOUT
 from math_agent.errors import classify_exception
 from math_agent.retry import llm_retry
 
 
 def _do_embed(model: str, input: list[str]) -> list[list[float]]:
     try:
-        resp = litellm.embedding(model=model, input=input)
+        # 与 _do_completion 同理：litellm 默认无 httpx timeout，ollama 半挂
+        # 会让 RAG retrieval 永挂。超时被 classify 为 LLMTransportError → 退避重试。
+        resp = litellm.embedding(model=model, input=input, timeout=EMBED_TIMEOUT)
     except Exception as e:
         raise classify_exception(e)
     return [item["embedding"] for item in resp.data]
