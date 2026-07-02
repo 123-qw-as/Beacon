@@ -86,3 +86,57 @@ def test_ingest_directory_is_idempotent_on_rerun(mocker, workdir):
     hits = s.search([1.0, 0.0, 0.0], k=1000)
     assert len(hits) == rep1.chunks_added
     s.close()
+
+
+def test_ingest_derives_source_type_paper_from_papers_dir(mocker, workdir):
+    """路径含 papers/ → source_type='paper'。"""
+    corpus = workdir / "corpus" / "papers"
+    corpus.mkdir(parents=True)
+    (corpus / "x.md").write_text("## 模型\n论文内容", encoding="utf-8")
+    mocker.patch("math_agent.rag.ingest.embed_texts",
+                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+
+    db = workdir / "vec.db"
+    ingest_directory(src_dir=workdir / "corpus", db_path=db,
+                     embedding_model="m", dim=3, max_chars=200, overlap=20)
+    from math_agent.rag.store import VectorStore
+    s = VectorStore.open(db, dim=3)
+    hits = s.search([1.0, 0.0, 0.0], k=10)
+    s.close()
+    assert hits and all(h.source_type == "paper" for h in hits)
+
+
+def test_ingest_derives_source_type_model_lib_default(mocker, workdir):
+    """路径含 models/（非 papers）→ source_type='model_lib'。"""
+    corpus = workdir / "corpus" / "models"
+    corpus.mkdir(parents=True)
+    (corpus / "y.md").write_text("## 适用场景\n模型内容", encoding="utf-8")
+    mocker.patch("math_agent.rag.ingest.embed_texts",
+                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+
+    db = workdir / "vec.db"
+    ingest_directory(src_dir=workdir / "corpus", db_path=db,
+                     embedding_model="m", dim=3, max_chars=200, overlap=20)
+    from math_agent.rag.store import VectorStore
+    s = VectorStore.open(db, dim=3)
+    hits = s.search([1.0, 0.0, 0.0], k=10)
+    s.close()
+    assert hits and all(h.source_type == "model_lib" for h in hits)
+
+
+def test_ingest_derives_source_type_model_lib_for_flat_corpus(mocker, workdir):
+    """corpus 根目录直接放文件（无 papers 父目录）→ 'model_lib'。"""
+    corpus = workdir / "corpus"
+    corpus.mkdir()
+    (corpus / "z.md").write_text("平铺内容", encoding="utf-8")
+    mocker.patch("math_agent.rag.ingest.embed_texts",
+                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+
+    db = workdir / "vec.db"
+    ingest_directory(src_dir=corpus, db_path=db,
+                     embedding_model="m", dim=3, max_chars=200, overlap=20)
+    from math_agent.rag.store import VectorStore
+    s = VectorStore.open(db, dim=3)
+    hits = s.search([1.0, 0.0, 0.0], k=10)
+    s.close()
+    assert hits and all(h.source_type == "model_lib" for h in hits)

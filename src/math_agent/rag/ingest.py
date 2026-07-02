@@ -47,6 +47,15 @@ def _read_file(path: Path) -> str:
     return _sanitize_text(path.read_text(encoding="utf-8", errors="ignore"))
 
 
+# 路径含 papers/论文 → paper（写作风格）；其余 → model_lib（建模参考）。
+_PAPER_DIR_HINTS = {"papers", "论文"}
+
+
+def _derive_source_type(path: Path) -> str:
+    parts = {p.lower() for p in path.parts}
+    return "paper" if (parts & _PAPER_DIR_HINTS) else "model_lib"
+
+
 def ingest_directory(
     *,
     src_dir: str | Path,
@@ -73,7 +82,8 @@ def ingest_directory(
             except Exception as e:
                 skipped.append(f"{p}: {e}")
                 continue
-            chunks = chunk_text(text, max_chars=max_chars, overlap=overlap, source=str(p))
+            chunks = chunk_text(text, max_chars=max_chars, overlap=overlap,
+                                source=str(p), source_type=_derive_source_type(p))
             if not chunks:
                 continue
             embeddings = embed_texts([c.text for c in chunks], model=embedding_model)
