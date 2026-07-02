@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import Any, Type, TypeVar
 
@@ -32,7 +33,7 @@ from pydantic import BaseModel, ValidationError
 
 from math_agent.config import DEFAULT_MODEL, MAX_LLM_RETRIES, LLM_TIMEOUT
 from math_agent.errors import (
-    LLMError, LLMValidationError, MathAgentError, classify_exception,
+    LLMError, LLMTransportError, LLMValidationError, MathAgentError, classify_exception,
 )
 from math_agent.retry import llm_retry
 from math_agent.tracing import get_current as _get_tracer
@@ -41,16 +42,38 @@ T = TypeVar("T", bound=BaseModel)
 
 
 def _do_completion(**kw):
-    """单次 litellm 调用 + 错误分类 + tracing 打点。"""
-    # 兜底 httpx 无限阻塞：litellm 默认无 timeout，本地 router 半挂连接时
-    # 会让 complete() 永不返回、tenacity 也进不去重试。显式设 per-request
-    # 超时，命中后被 classify 为 LLMTransportError → 走 llm_retry 退避链。
-    kw.setdefault("timeout", LLM_TIMEOUT)
+    """单次 litellm 调用，用 Thread.join 强制超时窗口兜底。
+
+    第一性原理：litellm 内部 timeout 参数实测不可靠（不同 provider handler
+    透传不一致），不能依赖第三方库自觉超时。Thread.join(timeout) 是 OS 级
+    可靠原语，超时后主线程必然继续，无论 litellm/httpx 内部在做什么。
+    子线程设 daemon=True，超时后不等待它——它会在 router 端 TCP keepalive
+    失败后自然退出，或随进程结束被 OS 回收。这与 tools/runner.py 用
+    subprocess.run(timeout=N) 是同一种哲学：调用方强制裁决，不信被调用方。
+    """
+    kw.setdefault("timeout", LLM_TIMEOUT)   # 第一层软超时（litellm 可能不透传，但有总比没有好）
     t0_ns = time.monotonic_ns()
-    try:
-        resp = litellm.completion(**kw)
-    except Exception as e:
-        raise classify_exception(e)
+    box: dict = {}
+
+    def _run():
+        try:
+            box["resp"] = litellm.completion(**kw)
+        except BaseException as e:   # BaseException: 连 KeyboardInterrupt 也接住交给主线程 classify
+            box["err"] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(LLM_TIMEOUT)
+
+    if t.is_alive():
+        # 子线程仍在跑 litellm → router 半挂，强制超时
+        raise LLMTransportError(
+            f"LLM 调用 {LLM_TIMEOUT}s 未返回（router 半挂？），强制超时"
+        )
+    if "err" in box:
+        raise classify_exception(box["err"])
+
+    resp = box["resp"]
     tracer = _get_tracer()
     if tracer is not None:
         usage = getattr(resp, "usage", None)
