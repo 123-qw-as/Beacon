@@ -1,0 +1,76 @@
+# 章节撰写：模型的求解
+
+本轮你**只**撰写一个字段：`solution`。其余章节由其他轮次处理，不要输出。
+
+{% include 'writer_iron_rules.md.j2' %}
+
+---
+
+## 本段大纲锚点
+{{ outline_solution }}
+
+---
+
+## 题目
+{{ problem }}
+
+## 模型方程（用于求解引用）
+{% for m in model_versions %}
+{% for eq in m.equations %}
+- \[ {{ eq }} \]
+{% endfor %}
+{% endfor %}
+
+## 代码运行结果（按 artifact 分组，每段保留末尾 500 字符以保住最终数字）
+{% for a in code_artifacts %}
+### [{{ loop.index }}] {{ a.purpose }} — success={{ a.success }}
+```
+{{ a.stdout[-500:] }}
+```
+{% if a.stderr and not a.success %}**stderr**：`{{ a.stderr[-300:] }}`{% endif %}
+{% endfor %}
+
+---
+
+{% if prior_critic %}
+## 上一轮 PaperCritic 反馈（必须逐条回应）
+
+PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.approved }}。
+
+**issues**（仅与本段相关，其余可忽略）：
+{% for i in prior_critic.issues %}
+- [{{ i.section }}] {{ i.problem }}
+{% endfor %}
+
+本次重写时**必须**逐条回应上述与本段相关的 issues；不能简单复述上一稿。
+{% endif %}
+
+---
+
+## 字段字数预算与结构要求
+
+| 字段 | 字数区间 | 强制结构 |
+|---|---|---|
+| `solution` | 400–800 | 采用 CER：Claim（结论数字）→ Evidence（"见附录 A.N"）→ Reasoning |
+
+**IRON RULE 1（禁编造）铁律**：solution 中的所有数字必须可在上方「代码运行结果」中追溯。无来源的数字一律改为定性表述。
+
+{% if retrieved_context %}
+
+---
+
+## 检索到的参考资料（仅供启发，不可照抄）
+{{ retrieved_context }}
+{% endif %}
+
+---
+
+## 输出契约
+
+请返回严格符合下列 schema 的 JSON（**不得包含其他键**）：
+
+```json
+{
+  "solution": str
+}
+```

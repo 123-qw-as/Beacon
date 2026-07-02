@@ -1,0 +1,76 @@
+# 章节撰写：参考文献
+
+本轮你**只**撰写一个字段：`references`。其余章节由其他轮次处理，不要输出。
+
+{% include 'writer_iron_rules.md.j2' %}
+
+---
+
+## 本段大纲锚点
+{{ outline_references }}
+
+---
+
+## 题目
+{{ problem }}
+
+## 题目所属领域
+{% if problem_domains %}
+{{ problem_domains | join("、") }}
+{% else %}
+（暂无领域标注——请根据题目自行推断可能涉及的学科领域与可引用的经典方法）
+{% endif %}
+
+## 已有参考文献（若为空，请根据模型方法补全）
+{% if references_list %}
+{% for r in references_list %}
+- {{ r }}
+{% endfor %}
+{% else %}
+（暂无——请根据 model_versions 中用到的方法，列出 ≥3 条经典参考文献）
+{% endif %}
+
+---
+
+{% if prior_critic %}
+## 上一轮 PaperCritic 反馈（必须逐条回应）
+
+PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.approved }}。
+
+**issues**（仅与本段相关，其余可忽略）：
+{% for i in prior_critic.issues %}
+- [{{ i.section }}] {{ i.problem }}
+{% endfor %}
+
+本次重写时**必须**逐条回应上述与本段相关的 issues；不能简单复述上一稿。
+{% endif %}
+
+---
+
+## 字段字数预算与结构要求
+
+| 字段 | 字数区间 | 强制结构 |
+|---|---|---|
+| `references` | ≥3 条 | `[n] 作者. 标题. 出处, 年.` 格式 |
+
+参考文献须与模型章节实际用到的方法对应（如用了排队论，就引排队论经典文献），不要泛泛罗列。
+
+{% if retrieved_context %}
+
+---
+
+## 检索到的参考资料（仅供启发，不可照抄）
+{{ retrieved_context }}
+{% endif %}
+
+---
+
+## 输出契约
+
+请返回严格符合下列 schema 的 JSON（**不得包含其他键**）：
+
+```json
+{
+  "references": str
+}
+```

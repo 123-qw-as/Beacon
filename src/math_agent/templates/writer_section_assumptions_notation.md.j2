@@ -1,0 +1,76 @@
+# 章节撰写：模型假设 + 符号说明
+
+本轮你**只**撰写两个字段：`assumptions`、`notation`。其余章节由其他轮次处理，不要输出。
+
+{% include 'writer_iron_rules.md.j2' %}
+
+---
+
+## 本段大纲锚点
+- 假设锚点：{{ outline_assumptions }}
+- 符号说明锚点：{{ outline_notation }}
+
+---
+
+## 题目
+{{ problem }}
+
+## 已确认假设（{{ assumptions | length }} 条）
+{% for a in assumptions %}
+{{ loop.index }}. **{{ a.statement }}**
+   - 依据：{{ a.rationale or "（未填写依据）" }}
+{% endfor %}
+
+## 模型变量（来自 model_versions，符号说明须覆盖全部）
+{% for m in model_versions %}
+{% for k, v in m.variables.items() %}
+- `{{ k }}`：{{ v }}
+{% endfor %}
+{% endfor %}
+
+---
+
+{% if prior_critic %}
+## 上一轮 PaperCritic 反馈（必须逐条回应）
+
+PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.approved }}。
+
+**issues**（仅与本段相关，其余可忽略）：
+{% for i in prior_critic.issues %}
+- [{{ i.section }}] {{ i.problem }}
+{% endfor %}
+
+本次重写时**必须**逐条回应上述与本段相关的 issues；不能简单复述上一稿。
+{% endif %}
+
+---
+
+## 各字段字数预算与结构要求
+
+| 字段 | 字数区间 | 强制结构 |
+|---|---|---|
+| `assumptions` | ≥5 条编号，每条 ≥2 句 | 每条形如「**假设1**：陈述；**依据**：……」，**每对之间空一行** |
+| `notation` | Markdown 表格 | `\| 符号 \| 含义 \| 单位 \|`，覆盖前述所有 `m.variables` |
+
+假设必须结构化分段：每条假设单独一段，`**假设1**：陈述` + 换行 + `**依据**：论证`，**每对之间空一行**。
+
+{% if retrieved_context %}
+
+---
+
+## 检索到的参考资料（仅供启发，不可照抄）
+{{ retrieved_context }}
+{% endif %}
+
+---
+
+## 输出契约
+
+请返回严格符合下列 schema 的 JSON（**不得包含其他键**）：
+
+```json
+{
+  "assumptions": str,
+  "notation": str
+}
+```

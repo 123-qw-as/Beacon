@@ -1,0 +1,93 @@
+# 章节撰写：模型的建立与演化
+
+本轮你**只**撰写一个字段：`model_section`。其余章节由其他轮次处理，不要输出。
+
+{% include 'writer_iron_rules.md.j2' %}
+
+---
+
+## 本段大纲锚点
+{{ outline_model_section }}
+
+---
+
+## 题目
+{{ problem }}
+
+## 已确认假设（{{ assumptions | length }} 条）
+{% for a in assumptions %}
+- {{ loop.index }}. {{ a.statement }}
+{% endfor %}
+
+## 模型演化（含推导链；每字段已截断至 100 字符）
+{% for m in model_versions %}
+### {{ loop.index }}. [{{ m.stage }}] {{ m.description[:100] }}
+{{ m.description[:100] }}
+
+**方程**：
+{% for eq in m.equations %}
+- \[ {{ eq }} \]
+{% endfor %}
+
+**变量**：
+{% for k, v in m.variables.items() %}
+- `{{ k }}`：{{ v }}
+{% endfor %}
+
+{% if m.derivation_steps %}
+**推导链**：
+{% for d in m.derivation_steps %}
+- **{{ d.title[:100] }}**
+  - 动机：{{ d.motivation[:100] }}
+  - 陈述：{{ d.statement[:100] }}
+  - 结果：{{ d.result[:100] }}
+{% endfor %}
+{% endif %}
+
+{% if m.notes %}**与上版差异**：{{ m.notes[:100] }}{% endif %}
+{% endfor %}
+
+---
+
+{% if prior_critic %}
+## 上一轮 PaperCritic 反馈（必须逐条回应）
+
+PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.approved }}。
+
+**issues**（仅与本段相关，其余可忽略）：
+{% for i in prior_critic.issues %}
+- [{{ i.section }}] {{ i.problem }}
+{% endfor %}
+
+本次重写时**必须**逐条回应上述与本段相关的 issues；不能简单复述上一稿。
+{% endif %}
+
+---
+
+## 字段字数预算与结构要求
+
+| 字段 | 字数区间 | 强制结构 |
+|---|---|---|
+| `model_section` | 800–1500 | 按 basic→improved→final 三小节；每小节首句 = "相对上版引入了 X" |
+
+每个子论点独占一段，段间空行。若 model_versions 提供了推导链，须在正文中体现其动机→陈述→结果的论证脉络。
+
+{% if retrieved_context %}
+
+---
+
+## 检索到的参考资料（仅供启发，不可照抄）
+{{ retrieved_context }}
+{% endif %}
+
+---
+
+## 输出契约
+
+请返回严格符合下列 schema 的 JSON（**不得包含其他键**）：
+
+```json
+{
+  "model_section": str
+}
+```
