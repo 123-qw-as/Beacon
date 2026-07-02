@@ -2,6 +2,7 @@ from math_agent.state import (
     MathModelingState,
     Assumption,
     ModelVersion,
+    DerivationStep,
     CriticReport,
     PaperSections,
     SensitivityRun,
@@ -95,3 +96,23 @@ def test_state_has_human_decision_default_none():
 def test_writer_iteration_defaults_to_zero():
     s = MathModelingState(problem="x")
     assert s.writer_iteration == 0
+
+
+def test_model_version_has_figure_purposes_default_empty():
+    from math_agent.state import ModelVersion
+    m = ModelVersion(stage="final", description="d")
+    assert m.figure_purposes == []
+    m.figure_purposes.append("需求时序图")
+    assert m.figure_purposes == ["需求时序图"]
+
+
+def test_derivation_step_carries_step_metadata():
+    from math_agent.state import DerivationStep
+    d = DerivationStep(
+        title="参数估计",
+        motivation="为何用 MLE",
+        statement="对数似然 \\ell(\\theta)=...",
+        result="\\hat\\theta = ...",
+    )
+    assert d.title == "参数估计"
+    assert d.motivation.startswith("为何")

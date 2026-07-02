@@ -23,12 +23,23 @@ class Assumption(BaseModel):
     sensitivity_relevant: bool = False  # Plan B: sensitivity 节点消费该字段
 
 
+class DerivationStep(BaseModel):
+    """模型推导链中的一步（动机 → 数学陈述 → 结果）。"""
+    title: str                       # "参数估计" / "约束推导" / "等价变换"
+    motivation: str                  # 为何做这步
+    statement: str                   # 数学陈述（含 inline LaTeX）
+    result: str = ""                 # 推导结论
+
+
 class ModelVersion(BaseModel):
     stage: ModelStage
     description: str
     equations: list[str] = Field(default_factory=list)
     variables: dict[str, str] = Field(default_factory=dict)
     notes: str = ""
+    figure_purposes: list[str] = Field(default_factory=list)  # Plan D：modeler 建议要画的图
+    derivation_steps: list[DerivationStep] = Field(default_factory=list)
+    derivation_notes: str = ""  # Plan D：self-consistency gate 产出的问题标注
 
 
 class CodeArtifact(BaseModel):
