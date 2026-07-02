@@ -18,7 +18,26 @@ class Chunk:
 
 
 _PREFERRED_BREAKS = ("\n\n", "。", "\n", "，", " ")
-_HEADING = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+# ponytail: PDF 标题识别是启发式——靠"第X章/§N/N.N + 后接中文/字母"模式匹配，
+# 不保证覆盖所有 PDF 格式，但对 CUMCM 教材足够；漏识别的标题退化为无 section，
+# 不影响检索。N.N 分支要求后接中文/字母，滤掉 "9.4    1" 这类数据行。
+_HEADING = re.compile(
+    r"^(?:"
+    r"(?:#{1,6})\s+(.+)"                                      # markdown ## / ###
+    r"|第[一二三四五六七八九十百零]+章\s+(.+)"                # 第六章 / 第二十五章
+    r"|§\s*\d+\s+(.+)"                                        # §1 / § 3 / §10
+    r"|\d+(?:\.\d+){1,2}\s+([\u4e00-\u9fffA-Za-z].*)"         # 1.1 标题（后接中文/字母）
+    r")\s*$",
+    re.MULTILINE,
+)
+
+
+def _heading_text(m: re.Match) -> str:
+    """从多分支匹配里取第一个非 None 捕获组（即标题文本）。"""
+    for g in m.groups():
+        if g is not None:
+            return g.strip()
+    return ""
 
 
 def _best_break(s: str, near: int) -> int:
@@ -32,7 +51,7 @@ def _best_break(s: str, near: int) -> int:
 
 
 def _split_by_headings(text: str):
-    """按 markdown 标题切成 (section, body) 序列；标题前的前言 section=''。"""
+    """按 markdown/PDF 标题切成 (section, body) 序列；标题前的前言 section=''。"""
     positions = list(_HEADING.finditer(text))
     if not positions:
         yield ("", text)
@@ -46,7 +65,7 @@ def _split_by_headings(text: str):
         end = positions[i + 1].start() if i + 1 < len(positions) else len(text)
         body = text[start:end].strip()
         if body:
-            yield (m.group(2).strip(), body)
+            yield (_heading_text(m), body)
 
 
 def _window(text: str, *, max_chars: int, overlap: int) -> list[str]:
