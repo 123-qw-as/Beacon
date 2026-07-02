@@ -33,6 +33,7 @@ def build_prompt(paper, n_figures, n_sensitivity, code_stdout: str = ""):
         f"# 章节素材\n{body}\n\n"
         f"# 客观信号\n- 图表数：{n_figures}\n- 敏感性 run 数：{n_sensitivity}\n"
         f"{stdout_block}\n"
-        f"请输出 JSON：{{\"target\":\"paper\",\"score\":int,\"issues\":[str],"
+        f"请输出 JSON：{{\"target\":\"paper\",\"score\":int,"
+        f"\"issues\":[{{\"section\":\"abstract|problem_restatement|assumptions|notation|model_section|solution|sensitivity|conclusion|references|general\",\"problem\":str}}, ...],"
         f"\"suggestions\":[str],\"approved\":bool}}。"
     )

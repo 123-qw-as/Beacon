@@ -4,6 +4,7 @@ from math_agent.state import (
     ModelVersion,
     DerivationStep,
     CriticReport,
+    CriticIssue,
     PaperSections,
     SensitivityRun,
     FigureArtifact,
@@ -32,7 +33,7 @@ def test_state_can_record_critic():
         CriticReport(
             target="modeler",
             score=7,
-            issues=["假设过强"],
+            issues=[CriticIssue(section="general", problem="假设过强")],
             suggestions=["放宽到时变需求"],
             stage="basic",
         )
@@ -121,3 +122,18 @@ def test_derivation_step_carries_step_metadata():
     assert d.result.startswith("\\hat")
     assert d.statement == "对数似然 \\ell(\\theta)=..."
     assert d.result == "\\hat\\theta = ..."
+
+
+def test_critic_issue_defaults_section_to_general():
+    ci = CriticIssue(problem="数字编造")
+    assert ci.section == "general"
+    assert ci.problem == "数字编造"
+
+
+def test_critic_report_accepts_structured_issues():
+    r = CriticReport(
+        target="paper", score=4, approved=False,
+        issues=[CriticIssue(section="solution", problem="46秒数字未在stdout出现")],
+    )
+    assert r.issues[0].section == "solution"
+    assert r.issues[0].problem.startswith("46秒")

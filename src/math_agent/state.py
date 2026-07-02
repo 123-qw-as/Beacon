@@ -51,10 +51,19 @@ class CodeArtifact(BaseModel):
     artifact_paths: list[str] = Field(default_factory=list)  # 生成的图、数据等
 
 
+class CriticIssue(BaseModel):
+    """结构化评审意见，section 字段限定到固定 enum。"""
+    section: Literal[
+        "abstract", "problem_restatement", "assumptions", "notation",
+        "model_section", "solution", "sensitivity", "conclusion", "references", "general",
+    ] = "general"
+    problem: str
+
+
 class CriticReport(BaseModel):
     target: Literal["analyst", "modeler", "coder", "writer", "paper"]
     score: int  # 0-10
-    issues: list[str] = Field(default_factory=list)
+    issues: list[CriticIssue] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
     approved: bool = False
     # stage 标记 critic 是针对哪个建模阶段产生的；analyst/coder/writer/paper 类型可为 None

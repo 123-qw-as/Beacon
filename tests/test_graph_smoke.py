@@ -3,7 +3,7 @@ from pathlib import Path
 
 from math_agent.graph import build_graph
 from math_agent.state import (
-    Assumption, ModelVersion, CriticReport, PaperSections,
+    Assumption, ModelVersion, CriticReport, CriticIssue, PaperSections,
     SensitivityRun, FigureArtifact, EvaluationReport, HumanDecision,
 )
 from math_agent.nodes.analyst import AnalystOutput
@@ -144,7 +144,7 @@ def test_writer_paper_critic_loop_isolated(mocker):
     mocker.patch("math_agent.nodes.writer.complete", side_effect=[paper_v1, paper_v2])
     mocker.patch("math_agent.nodes.paper_critic.complete", side_effect=[
         CriticReport(target="paper", score=4, approved=False,
-                     issues=["编数字"], suggestions=["改定性"]),
+                     issues=[CriticIssue(problem="编数字")], suggestions=["改定性"]),
         CriticReport(target="paper", score=9, approved=True),
     ])
 

@@ -32,7 +32,7 @@ PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.appr
 
 **issues**：
 {% for i in prior_critic.issues %}
-- {{ i }}
+- {{ i.problem }}
 {% endfor %}
 
 **suggestions**：

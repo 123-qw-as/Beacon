@@ -145,12 +145,12 @@ def test_writer_increments_writer_iteration(mocker):
 
 
 def test_prompt_includes_prior_paper_critic_feedback():
-    from math_agent.state import CriticReport
+    from math_agent.state import CriticReport, CriticIssue
     s = _rich_state()
     s.writer_iteration = 1
     s.critic_reports.append(CriticReport(
         target="paper", score=4, approved=False,
-        issues=["solution 段的 46 秒数字未在 stdout 中出现"],
+        issues=[CriticIssue(section="solution", problem="solution 段的 46 秒数字未在 stdout 中出现")],
         suggestions=["要么删掉数字，要么改成定性描述"],
     ))
     p = build_prompt(s)

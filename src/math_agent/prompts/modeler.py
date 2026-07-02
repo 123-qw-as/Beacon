@@ -16,7 +16,7 @@ def build_prompt(problem, assumptions, prev_model, stage, critic_feedback=None,
     fb = ""
     if critic_feedback:
         fb = "\n# 上一版 Critic 反馈\n" + "\n".join(
-            f"- 问题: {i}" for i in critic_feedback.issues
+            f"- 问题: {i.problem}" for i in critic_feedback.issues
         ) + "\n" + "\n".join(f"- 建议: {s}" for s in critic_feedback.suggestions)
     ctx = f"\n{retrieved_context}\n" if retrieved_context else ""
 

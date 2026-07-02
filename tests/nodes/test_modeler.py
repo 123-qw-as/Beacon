@@ -1,4 +1,4 @@
-from math_agent.state import MathModelingState, Assumption, ModelVersion, CriticReport
+from math_agent.state import MathModelingState, Assumption, ModelVersion, CriticReport, CriticIssue
 from math_agent.nodes.modeler import modeler_node
 
 
@@ -22,7 +22,7 @@ def test_modeler_passes_critic_feedback(mocker):
     s.assumptions.append(Assumption(statement="a", rationale="r"))
     s.model_versions.append(ModelVersion(stage="basic", description="old"))
     s.critic_reports.append(
-        CriticReport(target="modeler", score=4, issues=["弱"], suggestions=["改"], stage="basic")
+        CriticReport(target="modeler", score=4, issues=[CriticIssue(problem="弱")], suggestions=["改"], stage="basic")
     )
     modeler_node(s)
     prompt_arg = spy.call_args.args[0]
@@ -39,7 +39,7 @@ def test_modeler_ignores_other_stage_critic(mocker):
     s.assumptions.append(Assumption(statement="a", rationale="r"))
     s.model_versions.append(ModelVersion(stage="basic", description="basic-final"))
     s.critic_reports.append(
-        CriticReport(target="modeler", score=4, issues=["basic-issue"], suggestions=["basic-fix"], stage="basic")
+        CriticReport(target="modeler", score=4, issues=[CriticIssue(problem="basic-issue")], suggestions=["basic-fix"], stage="basic")
     )
     modeler_node(s)
     prompt_arg = spy.call_args.args[0]
