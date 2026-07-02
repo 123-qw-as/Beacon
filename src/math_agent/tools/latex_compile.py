@@ -41,8 +41,15 @@ def compile_latex(tex_path: str | Path, *, timeout: int = 120) -> LatexResult:
 
         full_log = "\n".join(log_acc)
         pdf = workdir / (tex_path.stem + ".pdf")
-        # success 双条件：PDF 存在 + log 里没有致命错误（以 '! ' 开头的行）
-        fatal_errors = [l for l in full_log.split("\n") if l.startswith("! ")]
+        # success 双条件：PDF 存在 + log 里没有致命错误（以 '! ' 开头的行）。
+        # 'Extra alignment tab has been changed to \cr' 和 'Missing $ inserted'
+        # 是 xelatex 已自动修复的非致命错误——xelatex 自己说了 "has been changed" /
+        # "inserted"，PDF 内容完整，不算致命。
+        _RECOVERABLE = ("has been changed to", "has been converted", "Missing $ inserted")
+        fatal_errors = [
+            l for l in full_log.split("\n")
+            if l.startswith("! ") and not any(r in l for r in _RECOVERABLE)
+        ]
         if not pdf.exists():
             return LatexResult(
                 success=False, log=full_log + "\nno pdf produced",
