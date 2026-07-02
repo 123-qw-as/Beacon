@@ -70,3 +70,70 @@ def test_format_snippets_single_block_over_max_truncates_block():
     assert len(out) <= 120 + 10
     assert "已截断" in out
     assert "big.md" in out   # 来源仍可见
+
+
+def test_search_filters_by_source_type(mocker, workdir):
+    """库里 paper + model_lib，source_type=paper 只回 paper。"""
+    from math_agent.rag.store import VectorStore
+    from math_agent.rag.chunking import Chunk
+
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.add(
+        chunks=[Chunk(text="paper 内容", source="p.md", index=0, source_type="paper")],
+        embeddings=[[1.0, 0.0, 0.0]],
+    )
+    store.add(
+        chunks=[Chunk(text="model 内容", source="m.md", index=0, source_type="model_lib")],
+        embeddings=[[0.0, 1.0, 0.0]],
+    )
+    store.close()
+
+    mocker.patch("math_agent.rag.retrieve.embed_texts",
+                 return_value=[[1.0, 0.0, 0.0]])
+    out = search("q", db_path=workdir / "vec.db", k=10, dim=3,
+                 embedding_model="m", source_type="paper")
+    assert len(out) == 1
+    assert out[0].source_type == "paper"
+
+
+def test_search_falls_back_when_filter_empty(mocker, workdir):
+    """库里只有 model_lib，source_type=paper 过滤无结果 → fallback 回全库。"""
+    from math_agent.rag.store import VectorStore
+    from math_agent.rag.chunking import Chunk
+
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.add(
+        chunks=[Chunk(text="model 内容", source="m.md", index=0, source_type="model_lib")],
+        embeddings=[[1.0, 0.0, 0.0]],
+    )
+    store.close()
+
+    mocker.patch("math_agent.rag.retrieve.embed_texts",
+                 return_value=[[1.0, 0.0, 0.0]])
+    out = search("q", db_path=workdir / "vec.db", k=10, dim=3,
+                 embedding_model="m", source_type="paper")
+    assert len(out) == 1   # fallback 回 model_lib
+    assert out[0].source_type == "model_lib"
+
+
+def test_search_no_filter_works_as_before(mocker, workdir):
+    """不传 source_type → 全返回（向后兼容）。"""
+    from math_agent.rag.store import VectorStore
+    from math_agent.rag.chunking import Chunk
+
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.add(
+        chunks=[Chunk(text="a", source="p.md", index=0, source_type="paper")],
+        embeddings=[[1.0, 0.0, 0.0]],
+    )
+    store.add(
+        chunks=[Chunk(text="b", source="m.md", index=0, source_type="model_lib")],
+        embeddings=[[0.0, 1.0, 0.0]],
+    )
+    store.close()
+
+    mocker.patch("math_agent.rag.retrieve.embed_texts",
+                 return_value=[[1.0, 0.0, 0.0]])
+    out = search("q", db_path=workdir / "vec.db", k=10, dim=3,
+                 embedding_model="m")
+    assert len(out) == 2

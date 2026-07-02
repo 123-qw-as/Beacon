@@ -13,6 +13,8 @@ class Snippet:
     text: str
     source: str
     score: float
+    source_type: str = ""
+    section: str = ""
 
 
 def search(
@@ -22,6 +24,7 @@ def search(
     k: int = 5,
     embedding_model: str = "text-embedding-3-small",
     dim: int = 1536,
+    source_type: str | None = None,
 ) -> list[Snippet]:
     db_path = Path(db_path)
     if not db_path.exists():
@@ -29,10 +32,14 @@ def search(
     vec = embed_texts([query], model=embedding_model)[0]
     store = VectorStore.open(db_path, dim=dim)
     try:
-        rows = store.search(vec, k=k)
+        rows = store.search(vec, k=k, source_type=source_type)
+        # 过滤无结果 → 退回全库 top-k，避免 writer 要论文却只有 model_lib 时返空。
+        if not rows and source_type is not None:
+            rows = store.search(vec, k=k)
     finally:
         store.close()
-    return [Snippet(text=r.text, source=r.source, score=r.score) for r in rows]
+    return [Snippet(text=r.text, source=r.source, score=r.score,
+                    source_type=r.source_type, section=r.section) for r in rows]
 
 
 def format_snippets(snippets: list[Snippet], *, max_chars: int | None = None) -> str:
