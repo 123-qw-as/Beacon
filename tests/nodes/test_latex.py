@@ -250,7 +250,23 @@ def test_md_table_to_latex():
     assert "下文。" in out
 
 
-def test_promote_inline_equations_promotes_long_equation():
+def test_md_table_escapes_ampersand_in_cells():
+    """cell 内容里的裸 & 必须转义为 \&，否则 LaTeX 报 'Extra alignment tab' halt。
+    但 $...$ math 模内的 & 也不转义——math 里 & 有特殊语义（align 对齐）。
+    这里测的是纯文本 & 转义。"""
+    s = """| 符号 | 含义 | 单位 |
+|------|------|------|
+| F | 固定&变动成本 | 元 |
+| $q_i$ | 调度量 | 辆 |"""
+    out = _md_table_to_latex(s)
+    # 纯文本里的裸 & 被转义
+    assert r"固定\&变动成本" in out
+    # 不应出现未转义的 3 列变 4 列（原 3 列，cell 里多个 & 会让 LaTeX 以为 4+ 列）
+    # 检查 F 那行只有 2 个作为分隔的 & （\& 不算）
+    f_line = [l for l in out.split("\n") if "固定" in l][0]
+    # F \& 固定\&变动成本 \& 元 → 2 个分隔 & + 1 个 \& = 正确
+    assert f_line.count(r"\&") == 1  # cell 内转义的 &
+    assert f_line.count(" & ") == 2  # 列分隔符
     """段内独立的长公式（含 =）应被提升为 equation 块。"""
     s = "调度后存量满足 $\\eta_i = s_i + x_i - y_i + \\xi_i$。其余约束如下。"
     out = _promote_inline_equations(s)

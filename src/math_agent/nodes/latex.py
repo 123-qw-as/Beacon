@@ -343,7 +343,7 @@ def _md_bullets_to_latex(s: str) -> str:
 
 
 def _md_table_to_latex(s: str) -> str:
-    """markdown pipe-table → LaTeX tabular。
+    """markdown pipe-table → LaTeX tabular.
 
     识别连续行：
         | h1 | h2 |
@@ -355,7 +355,18 @@ def _md_table_to_latex(s: str) -> str:
 
     分隔行 (`---`) 用来确定列数；之前一行作 header。
     不在表内的 `|` 不动。
+
+    cell 内容里的裸 `&` 必须转义为 `\\&`——否则 LaTeX 把它当列分隔符，
+    报 'Extra alignment tab' 并 halt。但 `$...$` math 模内的 `&`（如
+    align 环境的列对齐符）不动。
     """
+    def _escape_cell_amps(cell: str) -> str:
+        """转义 cell 里的裸 &，但跳过 $...$ math 模内的。"""
+        parts = cell.split("$")
+        for i in range(0, len(parts), 2):   # 偶数段 = text，奇数段 = math
+            parts[i] = parts[i].replace("&", r"\&")
+        return "$".join(parts)
+
     if not s or "|" not in s:
         return s
     lines = s.split("\n")
@@ -369,6 +380,7 @@ def _md_table_to_latex(s: str) -> str:
             # 分隔行只含 |、-、:、空格
             if sep.startswith("|") and set(sep) <= set("|-: "):
                 header_cells = [c.strip() for c in line.strip().strip("|").split("|")]
+                header_cells = [_escape_cell_amps(c) for c in header_cells]
                 ncols = len(header_cells)
                 # tabularx 自适应列宽 + booktabs 三线表（gmcmthesis 已 RequirePackage 二者）
                 # 三线表惯例：\toprule（顶）/ \midrule（表头下）/ \bottomrule（底），中间无横线
@@ -380,6 +392,7 @@ def _md_table_to_latex(s: str) -> str:
                 j = i + 2
                 while j < len(lines) and lines[j].lstrip().startswith("|"):
                     cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
+                    cells = [_escape_cell_amps(c) for c in cells]
                     # 对齐列数（缺则补空，多则截）
                     cells = (cells + [""] * ncols)[:ncols]
                     tbl.append(" & ".join(cells) + r" \\")
