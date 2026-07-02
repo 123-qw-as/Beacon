@@ -2,8 +2,28 @@
 
 ## 1. RAG 索引
 
+### 1.1 语料目录约定
+
+```
+corpus/
+├── models/    # 内置经典模型片段库（committed，可追踪）
+│   ├── 排队论.md
+│   ├── 优化模型.md
+│   ├── 评价模型.md
+│   ├── 微分方程.md
+│   └── 回归与预测.md
+└── papers/    # 用户自备的历年国一论文（gitignored，版权/体积）
+    └── *.md / *.pdf
+```
+
+**source_type 派生规则**：ingest 时按路径自动判定——路径含 `papers`/`论文` →
+`source_type="paper"`（写作风格，writer 节点优先检索此类）；其余 →
+`source_type="model_lib"`（建模参考，analyst/modeler 检索）。
+
+### 1.2 建库与运行
+
 ```bash
-# 把历年国一论文 PDF/MD 放进 corpus/
+# ingest 整个 corpus（models/ + papers/ 一并入库）
 math-agent ingest --src corpus --db runs/rag.sqlite \
   --embedding-model text-embedding-3-small --dim 1536
 
@@ -13,6 +33,11 @@ export MATH_AGENT_RAG_DB=runs/rag.sqlite
 math-agent run --problem tests/fixtures/sample_problem.json --out runs/demo
 ```
 
+> **旧库迁移提示**：升级到结构感知切片 + metadata 后，旧 `rag.sqlite` 的 chunks
+> 无 `source_type` 字段（自动迁移加空串列）。writer 过滤 `source_type="paper"` 会
+> 跳过旧 chunk，靠 retrieve fallback 兜回全库——能跑但不精确。**删库重新 ingest**
+> 才能让 source_type 过滤真正生效。
+
 可调环境变量：
 - `MATH_AGENT_RAG_ENABLED` (0/1)
 - `MATH_AGENT_RAG_DB` (sqlite 文件路径)
@@ -21,6 +46,12 @@ math-agent run --problem tests/fixtures/sample_problem.json --out runs/demo
 - `MATH_AGENT_RAG_TOPK` (默认 4)
 
 prompt 注入字符上限（防爆 8k token）：analyst 1500、modeler 1500、writer 800（见 `config.py`）。
+
+### 1.3 切片说明
+
+按 markdown 标题（`##`/`###`）分节，每节内固定窗口 + 重叠。每个 chunk 带两个
+metadata：`source_type`（paper/model_lib，见上）与 `section`（最近标题文本，如
+"适用场景""核心公式"）。模型库文件统一四节结构，保证切片干净。
 
 ## 2. 回归基准
 

@@ -49,11 +49,94 @@ def test_ingest_directory_skips_unreadable_files(mocker, workdir):
     bad = corpus / "bad.pdf"
     bad.write_bytes(b"not a pdf")
     mocker.patch("math_agent.rag.ingest._extract_pdf_text",
-                 side_effect=RuntimeError("corrupt"))
+                  side_effect=RuntimeError("corrupt"))
     mocker.patch("math_agent.rag.ingest.embed_texts",
-                 side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
 
     rep = ingest_directory(src_dir=corpus, db_path=workdir / "v.db",
                            embedding_model="m", dim=3, max_chars=200, overlap=20)
     assert rep.files_processed == 0
     assert len(rep.skipped) == 1
+
+
+def test_ingest_directory_is_idempotent_on_rerun(mocker, workdir):
+    """同一 corpus 跑两次：第二次 chunks_added==0，DB 内 chunk 数不变。"""
+    corpus = workdir / "corpus"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("段落一\n\n段落二", encoding="utf-8")
+    (corpus / "b.md").write_text("内容 b", encoding="utf-8")
+    mocker.patch("math_agent.rag.ingest.embed_texts",
+                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+
+    db = workdir / "vec.db"
+    rep1 = ingest_directory(src_dir=corpus, db_path=db,
+                            embedding_model="m", dim=3,
+                            max_chars=200, overlap=20)
+    assert rep1.chunks_added >= 2
+
+    # 第二次跑同样 corpus：应全部命中去重，新增 0
+    rep2 = ingest_directory(src_dir=corpus, db_path=db,
+                            embedding_model="m", dim=3,
+                            max_chars=200, overlap=20)
+    assert rep2.chunks_added == 0
+
+    # DB 内 chunk 总数与第一次一致（用 search k=大数间接校验不翻倍）
+    from math_agent.rag.store import VectorStore
+    s = VectorStore.open(db, dim=3)
+    hits = s.search([1.0, 0.0, 0.0], k=1000)
+    assert len(hits) == rep1.chunks_added
+    s.close()
+
+
+def test_ingest_derives_source_type_paper_from_papers_dir(mocker, workdir):
+    """路径含 papers/ → source_type='paper'。"""
+    corpus = workdir / "corpus" / "papers"
+    corpus.mkdir(parents=True)
+    (corpus / "x.md").write_text("## 模型\n论文内容", encoding="utf-8")
+    mocker.patch("math_agent.rag.ingest.embed_texts",
+                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+
+    db = workdir / "vec.db"
+    ingest_directory(src_dir=workdir / "corpus", db_path=db,
+                     embedding_model="m", dim=3, max_chars=200, overlap=20)
+    from math_agent.rag.store import VectorStore
+    s = VectorStore.open(db, dim=3)
+    hits = s.search([1.0, 0.0, 0.0], k=10)
+    s.close()
+    assert hits and all(h.source_type == "paper" for h in hits)
+
+
+def test_ingest_derives_source_type_model_lib_default(mocker, workdir):
+    """路径含 models/（非 papers）→ source_type='model_lib'。"""
+    corpus = workdir / "corpus" / "models"
+    corpus.mkdir(parents=True)
+    (corpus / "y.md").write_text("## 适用场景\n模型内容", encoding="utf-8")
+    mocker.patch("math_agent.rag.ingest.embed_texts",
+                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+
+    db = workdir / "vec.db"
+    ingest_directory(src_dir=workdir / "corpus", db_path=db,
+                     embedding_model="m", dim=3, max_chars=200, overlap=20)
+    from math_agent.rag.store import VectorStore
+    s = VectorStore.open(db, dim=3)
+    hits = s.search([1.0, 0.0, 0.0], k=10)
+    s.close()
+    assert hits and all(h.source_type == "model_lib" for h in hits)
+
+
+def test_ingest_derives_source_type_model_lib_for_flat_corpus(mocker, workdir):
+    """corpus 根目录直接放文件（无 papers 父目录）→ 'model_lib'。"""
+    corpus = workdir / "corpus"
+    corpus.mkdir()
+    (corpus / "z.md").write_text("平铺内容", encoding="utf-8")
+    mocker.patch("math_agent.rag.ingest.embed_texts",
+                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+
+    db = workdir / "vec.db"
+    ingest_directory(src_dir=corpus, db_path=db,
+                     embedding_model="m", dim=3, max_chars=200, overlap=20)
+    from math_agent.rag.store import VectorStore
+    s = VectorStore.open(db, dim=3)
+    hits = s.search([1.0, 0.0, 0.0], k=10)
+    s.close()
+    assert hits and all(h.source_type == "model_lib" for h in hits)
