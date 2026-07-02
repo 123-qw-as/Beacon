@@ -60,33 +60,6 @@ def test_ingest_directory_skips_unreadable_files(mocker, workdir):
 
 
 def test_ingest_directory_is_idempotent_on_rerun(mocker, workdir):
-    """同一 corpus 跑两次：第二次不新增 chunk，DB 内总数不变。"""
-    corpus = workdir / "corpus"
-    corpus.mkdir()
-    (corpus / "a.md").write_text("段落一\n\n段落二", encoding="utf-8")
-    (corpus / "b.md").write_text("内容 b", encoding="utf-8")
-    mocker.patch("math_agent.rag.ingest.embed_texts",
-                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
-
-    db = workdir / "vec.db"
-    rep1 = ingest_directory(src_dir=corpus, db_path=db,
-                            embedding_model="m", dim=3,
-                            max_chars=200, overlap=20)
-    rep2 = ingest_directory(src_dir=corpus, db_path=db,
-                            embedding_model="m", dim=3,
-                            max_chars=200, overlap=20)
-    assert rep1.chunks_added > 0
-    assert rep2.chunks_added == 0   # 全部命中去重
-
-    # DB 内总数应等于第一次新增数，不翻倍
-    from math_agent.rag.store import VectorStore
-    s = VectorStore.open(db, dim=3)
-    total = len(s.search([1.0, 0.0, 0.0], k=1000))
-    s.close()
-    assert total == rep1.chunks_added
-
-
-def test_ingest_directory_is_idempotent_on_rerun(mocker, workdir):
     """同一 corpus 跑两次：第二次 chunks_added==0，DB 内 chunk 数不变。"""
     corpus = workdir / "corpus"
     corpus.mkdir()
@@ -110,6 +83,6 @@ def test_ingest_directory_is_idempotent_on_rerun(mocker, workdir):
     # DB 内 chunk 总数与第一次一致（用 search k=大数间接校验不翻倍）
     from math_agent.rag.store import VectorStore
     s = VectorStore.open(db, dim=3)
-    hits = s.search([1.0, 0.0, 0.0], k=100)
+    hits = s.search([1.0, 0.0, 0.0], k=1000)
     assert len(hits) == rep1.chunks_added
     s.close()
