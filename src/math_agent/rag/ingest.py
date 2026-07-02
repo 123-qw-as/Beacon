@@ -77,9 +77,9 @@ def ingest_directory(
             if not chunks:
                 continue
             embeddings = embed_texts([c.text for c in chunks], model=embedding_model)
-            store.add(chunks=chunks, embeddings=embeddings)
+            added = store.add(chunks=chunks, embeddings=embeddings)
             files_processed += 1
-            chunks_added += len(chunks)
+            chunks_added += added
     finally:
         store.close()
     return IngestReport(files_processed=files_processed,
