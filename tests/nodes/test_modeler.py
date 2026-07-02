@@ -87,3 +87,19 @@ def test_modeler_does_not_filter_source_type(mocker):
     s.assumptions.append(Assumption(statement="a", rationale="r"))
     modeler_node(s)
     assert spy.call_args.kwargs.get("source_type") is None
+
+
+def test_modeler_prompt_asks_figure_purposes_for_final_stage():
+    """final 阶段的 modeler prompt 应要求 LLM 输出 figure_purposes（Plan D Phase 3）。"""
+    from math_agent.prompts.modeler import build_prompt
+    asum = [Assumption(statement="a", rationale="r")]
+    prompt = build_prompt("problem", asum, None, "final")
+    assert "figure_purposes" in prompt
+
+
+def test_modeler_prompt_omits_figure_purposes_for_basic_stage():
+    """basic 阶段不需要图，prompt 不应出现 figure_purposes 指令。"""
+    from math_agent.prompts.modeler import build_prompt
+    asum = [Assumption(statement="a", rationale="r")]
+    prompt = build_prompt("problem", asum, None, "basic")
+    assert "figure_purposes" not in prompt
