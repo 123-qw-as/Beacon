@@ -127,8 +127,7 @@ def test_resolve_callback_names_includes_langsmith_when_env_set(monkeypatch):
 
 
 def test_complete_passes_timeout_to_litellm(mocker):
-    """llm.complete 必须给 litellm.completion 传 timeout，防 httpx 无限阻塞。"""
-    import httpx
+    """llm.complete 仍给 litellm.completion 传 timeout（作为第一层软超时）。"""
     from math_agent.config import LLM_TIMEOUT
 
     captured = {}
@@ -145,7 +144,7 @@ def test_complete_passes_timeout_to_litellm(mocker):
 
 
 def test_timeout_is_classified_as_transport_and_retried(mocker):
-    """litellm 抛 httpx.TimeoutException → 应 classify 为 LLMTransportError → 走 tenacity 重试。"""
+    """litellm 抛 httpx.TimeoutException → 子线程 catch → classify 为 LLMTransportError → 走 tenacity 重试。"""
     import httpx
 
     timeout_err = httpx.TimeoutException("Read timed out")
@@ -167,7 +166,7 @@ def test_timeout_is_classified_as_transport_and_retried(mocker):
 def test_timeout_exhausts_retries_raises_transport_error(mocker):
     """连续超时超过重试预算 → 抛 LLMError（且底层是 LLMTransportError 语义）。"""
     import httpx
-    from math_agent.errors import LLMError, LLMTransportError
+    from math_agent.errors import LLMError
 
     mocker.patch("litellm.completion", side_effect=httpx.TimeoutException("stalled"))
     with pytest.raises(LLMError):
@@ -175,3 +174,31 @@ def test_timeout_exhausts_retries_raises_transport_error(mocker):
             "hi", model="gpt-4o-mini", max_retries=0,
             _retry_attempts=2, _retry_base_delay=0,
         )
+
+
+def test_complete_hangs_forever_times_out_via_thread_join(mocker, monkeypatch):
+    """第一性原理验证：litellm.completion 永不返回（模拟 router 半挂）时，
+    Thread.join 超时后主线程必须抛 LLMTransportError，而不是无限阻塞。
+
+    用小 LLM_TIMEOUT（2s）避免真等 180s；mock litellm.completion 为 sleep(999)。
+    """
+    import time as _time
+    from math_agent.errors import LLMError, LLMTransportError
+    import math_agent.llm as llm_mod
+
+    # 把超时窗口临时调小到 2s，避免测试等 180s
+    monkeypatch.setattr(llm_mod, "LLM_TIMEOUT", 2.0)
+
+    def _hang(**kw):
+        _time.sleep(999)   # 模拟 router 半挂，永不返回
+
+    mocker.patch("litellm.completion", side_effect=_hang)
+
+    import time as _t
+    t0 = _t.monotonic()
+    with pytest.raises(LLMError):   # tenacity 重试 1 次后耗尽 → LLMError
+        llm.complete("hi", model="gpt-4o-mini",
+                     _retry_attempts=1, _retry_base_delay=0)
+    elapsed = _t.monotonic() - t0
+    # 应在 ~2-6s 内返回（1 次 join 超时 2s + 可能 1 次重试再超时 2s）
+    assert elapsed < 15, f"耗时 {elapsed:.1f}s，Thread.join 超时未生效"
