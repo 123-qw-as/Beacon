@@ -70,15 +70,23 @@ def writer_node(state: MathModelingState) -> dict:
     else:
         groups_to_run = {g.name for g in writer_sections()}
 
+    # ---- Plan D: 检索参考文献一次，references 分组复用 ----
+    references = None
+    if "references" in groups_to_run:
+        from math_agent.tools.references import select_references
+        references = select_references(state.problem, state.problem_domains)
+
     # ---- Pass 2：逐章填充 ----
     for group in writer_sections():
         if group.name not in groups_to_run:
             continue  # 保留 paper 中已有的该组文本
+        refs_for_group = references if group.name == "references" else None
         section_out = complete(
             build_section_prompt(
                 group.name, state, outline,
                 prior_critic=prior_critic,
                 retrieved_context=ctx,
+                references_list=refs_for_group,
             ),
             schema=schema_for_group(group.name),
             system=SYSTEM,

@@ -24,7 +24,7 @@
 ## 已有参考文献（若为空，请根据模型方法补全）
 {% if references_list %}
 {% for r in references_list %}
-- {{ r }}
+- {{ r.authors | join(", ") }}. {{ r.title }}. {{ r.venue }}, {{ r.year }}.
 {% endfor %}
 {% else %}
 （暂无——请根据 model_versions 中用到的方法，列出 ≥3 条经典参考文献）

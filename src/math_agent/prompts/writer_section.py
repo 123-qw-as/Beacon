@@ -174,10 +174,12 @@ def build_section_prompt(
     *,
     prior_critic=None,
     retrieved_context: str = "",
+    references_list=None,
 ) -> str:
     """渲染某分组模板（Pass 2 单组）。
 
     prior_critic: CriticReport 或 None。模板内 {% if prior_critic %} 控制是否渲染反馈块。
+    references_list: list[Reference] 或 None，仅 references 分组需要（Plan D Phase 5）。
     """
     group = _group_by_name(group_name)
     # 标准视图 dict：与原 writer_prompt 一致的全量素材，由各模板按需取用。
@@ -189,8 +191,8 @@ def build_section_prompt(
         "sensitivity_runs": state.sensitivity_runs,
         "figures": state.figures,
         "prior_critic": prior_critic if prior_critic is not None else state.latest_critic("paper"),
-        "problem_domains": [],      # Phase 5 才有；现暂传空列表
-        "references_list": [],      # Phase 5 才有；现暂传空列表
+        "problem_domains": state.problem_domains,  # Plan D：analyst 输出
+        "references_list": references_list or [],  # Plan D：检索到的真实文献
         # 大纲锚点：每章一个 outline_<field> 变量
         "outline_abstract": outline.abstract,
         "outline_problem_restatement": outline.problem_restatement,

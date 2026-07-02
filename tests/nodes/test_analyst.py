@@ -40,3 +40,15 @@ def test_analyst_queries_rag_when_enabled(mocker):
     )
     analyst_node(MathModelingState(problem="p"))
     spy.assert_called_once()
+
+
+def test_analyst_outputs_problem_domains(mocker):
+    from math_agent.state import Assumption
+    mocker.patch("math_agent.nodes.analyst.complete",
+                 return_value=AnalystOutput(
+                     assumptions=[Assumption(statement="a", rationale="r")],
+                     problem_domains=["optimization", "queueing"],
+                 ))
+    s = MathModelingState(problem="p")
+    delta = analyst_node(s)
+    assert delta["problem_domains"] == ["optimization", "queueing"]

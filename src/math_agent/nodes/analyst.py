@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from math_agent.llm import complete
 from math_agent.config import (
     MODEL_ROUTING, RAG_ENABLED, RAG_DB_PATH, RAG_EMBEDDING_MODEL,
@@ -11,6 +11,7 @@ from math_agent.state import Assumption, MathModelingState
 
 class AnalystOutput(BaseModel):
     assumptions: list[Assumption]
+    problem_domains: list[str] = Field(default_factory=list)  # Plan D
 
 
 def analyst_node(state: MathModelingState) -> dict:
@@ -30,4 +31,4 @@ def analyst_node(state: MathModelingState) -> dict:
         system=SYSTEM,
         model=MODEL_ROUTING["analyst"],
     )
-    return {"assumptions": out.assumptions}
+    return {"assumptions": out.assumptions, "problem_domains": out.problem_domains}
