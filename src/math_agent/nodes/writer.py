@@ -24,6 +24,7 @@ def writer_node(state: MathModelingState) -> dict:
             query,
             db_path=RAG_DB_PATH, k=RAG_TOPK,
             embedding_model=RAG_EMBEDDING_MODEL, dim=RAG_EMBEDDING_DIM,
+            source_type="paper",
         )
         ctx = format_snippets(snippets, max_chars=RAG_CTX_MAX_CHARS_WRITER)
 

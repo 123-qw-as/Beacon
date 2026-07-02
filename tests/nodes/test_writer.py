@@ -195,3 +195,17 @@ def test_writer_queries_rag_when_enabled(mocker):
     )
     _wn(_rich_state())
     spy.assert_called_once()
+
+
+def test_writer_filters_rag_by_paper_source_type(mocker):
+    """writer 要写作风格，检索时过滤 source_type='paper'。"""
+    from math_agent.nodes.writer import writer_node as _wn
+    mocker.patch("math_agent.nodes.writer.RAG_ENABLED", True)
+    mocker.patch("math_agent.nodes.writer.RAG_DB_PATH", "/tmp/nonexistent.db")
+    spy = mocker.patch("math_agent.nodes.writer.search", return_value=[])
+    mocker.patch(
+        "math_agent.nodes.writer.complete",
+        return_value=PaperSections(),
+    )
+    _wn(_rich_state())
+    assert spy.call_args.kwargs.get("source_type") == "paper"
