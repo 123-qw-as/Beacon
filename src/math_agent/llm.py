@@ -30,7 +30,7 @@ os.environ.setdefault("LITELLM_LOG", "CRITICAL")
 
 from pydantic import BaseModel, ValidationError
 
-from math_agent.config import DEFAULT_MODEL, MAX_LLM_RETRIES
+from math_agent.config import DEFAULT_MODEL, MAX_LLM_RETRIES, LLM_TIMEOUT
 from math_agent.errors import (
     LLMError, LLMValidationError, MathAgentError, classify_exception,
 )
@@ -42,6 +42,10 @@ T = TypeVar("T", bound=BaseModel)
 
 def _do_completion(**kw):
     """单次 litellm 调用 + 错误分类 + tracing 打点。"""
+    # 兜底 httpx 无限阻塞：litellm 默认无 timeout，本地 router 半挂连接时
+    # 会让 complete() 永不返回、tenacity 也进不去重试。显式设 per-request
+    # 超时，命中后被 classify 为 LLMTransportError → 走 llm_retry 退避链。
+    kw.setdefault("timeout", LLM_TIMEOUT)
     t0_ns = time.monotonic_ns()
     try:
         resp = litellm.completion(**kw)
