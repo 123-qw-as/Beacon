@@ -49,23 +49,26 @@ _UNIT_RE = re.compile(r"^(.*?)\s*[（(]([^()（）]+)[)）]\s*$")
 
 
 def _sanitize_table_cell(text: str) -> str:
-    """转义表格 cell 里的 LaTeX 危险字符，让它们当纯文本渲染。
+    """清理表格 cell 里的 LaTeX 命令，让它们当纯文本渲染。
 
     变量名里可能有 \\mathbf{h}、$F_{i,t}$ 等——在 tabularx 里裸用会崩编译。
-    ponytail: 转义 \\ $ & % # _ { }，保留中文和普通字符。
+    ponytail: 不用 \\textbackslash{} 转义（会被 _prepare_section 二次处理拆坏），
+    直接删掉反斜杠和 $，保留字母——变量表里不需要渲染数学公式，纯文本够了。
     """
     if not text:
         return text
-    # 先把已有的 $...$ 数学环境内容保留（把 $ 之间的内容整体转义内部特殊符）
-    # ponytail: 太复杂，直接全转义——变量表里不需要渲染数学公式，纯文本够了
-    return (text.replace("\\", r"\textbackslash{}")
-            .replace("$", r"\$")
-            .replace("&", r"\&")
-            .replace("%", r"\%")
-            .replace("#", r"\#")
-            .replace("_", r"\_")
-            .replace("{", r"\{")
-            .replace("}", r"\}"))
+    # 删掉反斜杠（\mathbf → mathbf，\beta → beta）
+    text = text.replace("\\", "")
+    # 删掉 $（$F_{i,t}$ → F_{i,t}）
+    text = text.replace("$", "")
+    # 转义剩余的特殊字符
+    text = text.replace("&", r"\&")
+    text = text.replace("%", r"\%")
+    text = text.replace("#", r"\#")
+    text = text.replace("_", r"\_")
+    text = text.replace("{", r"\{")
+    text = text.replace("}", r"\}")
+    return text
 
 
 def _generate_variable_table(variables: dict[str, str]) -> str:
