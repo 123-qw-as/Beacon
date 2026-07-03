@@ -84,3 +84,44 @@ def test_variable_table_no_unit_in_parens():
     assert len(lines) == 3
     assert "—" in lines[2]        # 无单位
 
+
+from math_agent.state import SensitivityRun
+from math_agent.nodes.table_assembler import _generate_sensitivity_table
+
+
+def test_sensitivity_table_basic():
+    runs = [
+        SensitivityRun(parameter="alpha", values=[0.1, 0.5, 1.0],
+                       metric="MAE", results=[10.0, 20.0, 30.0]),
+    ]
+    table = _generate_sensitivity_table(runs)
+    assert "| 参数 | 取值范围 | 指标 | 指标变化范围 | 敏感性评级 |" in table
+    assert "alpha" in table
+    assert "MAE" in table
+    assert "高" in table          # (30-10)/20 = 100% > 30% → 高
+
+
+def test_sensitivity_table_medium_rating():
+    runs = [
+        SensitivityRun(parameter="beta", values=[1, 2, 3],
+                       metric="cost", results=[100.0, 115.0, 108.0]),
+    ]
+    table = _generate_sensitivity_table(runs)
+    # (115-100)/107.67 ≈ 13.9% → 中
+    assert "中" in table
+
+
+def test_sensitivity_table_low_rating():
+    runs = [
+        SensitivityRun(parameter="gamma", values=[1, 2, 3],
+                       metric="rate", results=[0.90, 0.91, 0.905]),
+    ]
+    table = _generate_sensitivity_table(runs)
+    # (0.91-0.90)/0.905 ≈ 1.1% → 低
+    assert "低" in table
+
+
+def test_sensitivity_table_empty():
+    table = _generate_sensitivity_table([])
+    assert table == ""
+

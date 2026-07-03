@@ -65,3 +65,32 @@ def _generate_variable_table(variables: dict[str, str]) -> str:
             meaning, unit = desc.strip(), "—"
         lines.append(f"| {name} | {meaning} | {unit} |")
     return "\n".join(lines)
+
+
+def _sensitivity_rating(results: list[float]) -> str:
+    """(max-min)/|mean| → 高/中/低。"""
+    if not results or len(results) < 2:
+        return "—"
+    mean = sum(results) / len(results)
+    if mean == 0:
+        return "—"
+    ratio = (max(results) - min(results)) / abs(mean)
+    if ratio > 0.30:
+        return "高"
+    if ratio > 0.10:
+        return "中"
+    return "低"
+
+
+def _generate_sensitivity_table(runs: list) -> str:
+    """从 SensitivityRun 列表生成敏感性结果汇总 markdown 表。"""
+    if not runs:
+        return ""
+    lines = ["| 参数 | 取值范围 | 指标 | 指标变化范围 | 敏感性评级 |",
+             "|---|---|---|---|---|"]
+    for r in runs:
+        vals = f"[{r.values[0]}, {r.values[-1]}]" if r.values else "—"
+        res = f"[{min(r.results):.4g}, {max(r.results):.4g}]" if r.results else "—"
+        rating = _sensitivity_rating(r.results)
+        lines.append(f"| {r.parameter} | {vals} | {r.metric} | {res} | {rating} |")
+    return "\n".join(lines)
