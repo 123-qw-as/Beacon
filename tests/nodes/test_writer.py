@@ -114,10 +114,10 @@ def test_prompt_contains_iron_rules():
 
 def test_prompt_contains_word_budget_per_section():
     p = build_prompt(_rich_state())
-    # 关键预算锚点
-    assert "250–400" in p          # abstract
-    assert "800–1500" in p         # model_section
-    assert "300–600" in p          # sensitivity
+    # 关键预算锚点（Plan D: 大幅提升字数下限以保证正文 ≥20 页）
+    assert "400–600" in p          # abstract
+    assert "3000–5000" in p        # model_section
+    assert "1000–1800" in p        # sensitivity
 
 
 def test_prompt_contains_chinese_style_blocklist():
