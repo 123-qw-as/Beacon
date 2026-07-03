@@ -60,6 +60,9 @@ class CodeArtifact(BaseModel):
     stderr: str = ""
     success: bool = False
     artifact_paths: list[str] = Field(default_factory=list)  # 生成的图、数据等
+    # ponytail: 不新建 BaselineResult 模型，复用 CodeArtifact + category 区分
+    # "figure" = 主方案绘图, "baseline:no_schedule" / "baseline:simple_pred" / "baseline:greedy" = 对照方案
+    category: str = "figure"
 
 
 class CriticIssue(BaseModel):

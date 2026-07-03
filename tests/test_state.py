@@ -144,3 +144,12 @@ def test_state_has_table_warnings_field():
     s = MathModelingState(problem="x")
     assert hasattr(s, "table_warnings")
     assert s.table_warnings == []
+
+
+def test_code_artifact_has_category_field():
+    """category 区分主方案(figure) vs 对照方案(baseline)。默认 'figure' 保持向后兼容。"""
+    from math_agent.state import CodeArtifact
+    a = CodeArtifact(purpose="test", code="print(1)")
+    assert a.category == "figure"  # 默认值
+    b = CodeArtifact(purpose="baseline", code="print(2)", category="baseline:no_schedule")
+    assert b.category == "baseline:no_schedule"
