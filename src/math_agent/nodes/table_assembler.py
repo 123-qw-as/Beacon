@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from math_agent.tools.runner import extract_numeric_results
+
 # 禁用词 → 替换词。顺序敏感：先替换单数 issue 再处理其他。
 # ponytail: 用 list 而非 dict，因为同一模式可能需要不同替换上下文。
 _FORBIDDEN_PATTERNS: list[tuple[re.Pattern, str]] = [
@@ -91,6 +93,61 @@ def _generate_sensitivity_table(runs: list) -> str:
         res = f"[{min(r.results):.4g}, {max(r.results):.4g}]" if r.results else "—"
         rating = _sensitivity_rating(r.results)
         lines.append(f"| {r.parameter} | {vals} | {r.metric} | {res} | {rating} |")
+    return "\n".join(lines)
+
+
+# baseline category → 中文显示名
+_BASELINE_NAMES = {
+    "no_schedule": "无调度",
+    "simple_pred": "简单平均预测",
+    "greedy": "贪婪启发式",
+    "ours": "本文方案",
+}
+
+
+def _generate_comparison_table(artifacts: list) -> str:
+    """从 code_artifacts 中提取 baseline 对照结果生成对比表。
+
+    主方案（category='figure'）的 stdout 如果也含 RESULT: baseline=ours 也纳入。
+    无 baseline artifacts 或无 RESULT 行时返回空字符串。
+    """
+    rows: list[dict[str, str]] = []
+    for a in artifacts:
+        results = extract_numeric_results(a.stdout) if a.stdout else {}
+        if not results:
+            if a.category.startswith("baseline:"):
+                cat_key = a.category.split(":", 1)[1]
+                name = _BASELINE_NAMES.get(cat_key, cat_key)
+                rows.append({"方案": name, "状态": "运行失败"})
+            continue
+        for identifier, metrics in results.items():
+            name = _BASELINE_NAMES.get(identifier, identifier)
+            row = {"方案": name}
+            row.update({k: str(v) for k, v in metrics.items()})
+            rows.append(row)
+
+    if not rows:
+        return ""
+
+    all_metrics: list[str] = []
+    seen = set()
+    for r in rows:
+        for k in r:
+            if k not in seen and k != "方案":
+                seen.add(k)
+                all_metrics.append(k)
+
+    if not all_metrics:
+        all_metrics = ["状态"]
+
+    header = "| 方案 | " + " | ".join(all_metrics) + " |"
+    sep = "|---|" + "|".join(["---" for _ in all_metrics]) + "|"
+    lines = [header, sep]
+    for r in rows:
+        cells = [r.get("方案", "—")]
+        for m in all_metrics:
+            cells.append(r.get(m, "—"))
+        lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
 

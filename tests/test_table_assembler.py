@@ -229,3 +229,58 @@ def test_references_section_not_cleaned():
     assert "Evidence" in result["paper"].references
     assert "Issue" in result["paper"].references
 
+
+from math_agent.nodes.table_assembler import _generate_comparison_table
+from math_agent.state import CodeArtifact
+
+
+def test_comparison_table_from_baselines():
+    artifacts = [
+        CodeArtifact(
+            purpose="无调度对照", code="", success=True,
+            stdout="RESULT: baseline=no_schedule total_cost=1245.3 service_rate=0.82",
+            category="baseline:no_schedule",
+        ),
+        CodeArtifact(
+            purpose="贪婪对照", code="", success=True,
+            stdout="RESULT: baseline=greedy total_cost=980.0 service_rate=0.91",
+            category="baseline:greedy",
+        ),
+        CodeArtifact(
+            purpose="主方案", code="", success=True,
+            stdout="RESULT: baseline=ours total_cost=750.5 service_rate=0.95",
+            category="figure",
+        ),
+    ]
+    table = _generate_comparison_table(artifacts)
+    assert "| 方案 |" in table
+    assert "无调度" in table
+    assert "1245.3" in table
+    assert "980.0" in table
+    assert "750.5" in table
+
+
+def test_comparison_table_empty_when_no_baselines():
+    artifacts = [
+        CodeArtifact(purpose="main", code="", success=True, stdout="", category="figure"),
+    ]
+    table = _generate_comparison_table(artifacts)
+    assert table == ""
+
+
+def test_comparison_table_handles_failed_baselines():
+    artifacts = [
+        CodeArtifact(
+            purpose="无调度对照", code="", success=False,
+            stdout="", stderr="error", category="baseline:no_schedule",
+        ),
+        CodeArtifact(
+            purpose="贪婪对照", code="", success=True,
+            stdout="RESULT: baseline=greedy total_cost=980.0",
+            category="baseline:greedy",
+        ),
+    ]
+    table = _generate_comparison_table(artifacts)
+    assert "运行失败" in table
+    assert "980.0" in table
+
