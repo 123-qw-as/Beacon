@@ -33,7 +33,7 @@ MAX_CODE_RETRIES = 1           # coder / sensitivity 沙箱失败后再给一次
 # 归为 LLMTransportError，自动纳入 llm_retry 现有 tenacity 指数退避重试
 # （5 次 2/4/8/16/32s + jitter），最坏 ~5min 后抛 LLMError 干净退出，
 # 而不是无限僵死。env 可调以适配更大的生成预算。
-LLM_TIMEOUT = float(os.getenv("MATH_AGENT_LLM_TIMEOUT", "180"))
+LLM_TIMEOUT = float(os.getenv("MATH_AGENT_LLM_TIMEOUT", "300"))
 EMBED_TIMEOUT = float(os.getenv("MATH_AGENT_EMBED_TIMEOUT", "60"))
 
 # RAG（默认关闭；ingest 后通过环境变量启用）
