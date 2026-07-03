@@ -210,16 +210,17 @@ def main() -> int:
             f"writer 应调 8 次（1 outline + 7 section），实际 {writer_calls}"
         print(f"[1] writer 多段调用: {writer_calls} 次 (1 outline + 7 section)  OK")
 
-        # ---- 验证 2：coder 多图 ----
-        # final 阶段 modeler 输出 3 个 figure_purposes → coder 调 3 次
+        # ---- 验证 2：coder 多图 + Phase 2 对照方案 ----
+        # final 阶段 modeler 输出 3 个 figure_purposes → coder 主图调 3 次
+        # Phase 2: + 3 个对照方案 = 6 次
         coder_calls = call_log["coder"]
-        assert coder_calls == 3, \
-            f"coder 应调 3 次（3 个 figure_purposes），实际 {coder_calls}"
+        assert coder_calls == 6, \
+            f"coder 应调 6 次（3 figure + 3 baseline），实际 {coder_calls}"
         code_artifacts = final.get("code_artifacts", []) if isinstance(final, dict) \
             else final.code_artifacts
-        assert len(code_artifacts) == 3, \
-            f"应有 3 个 code_artifacts，实际 {len(code_artifacts)}"
-        print(f"[2] coder 多图: {coder_calls} 次调用, {len(code_artifacts)} artifacts  OK")
+        assert len(code_artifacts) == 6, \
+            f"应有 6 个 code_artifacts（3 figure + 3 baseline），实际 {len(code_artifacts)}"
+        print(f"[2] coder 多图+对照: {coder_calls} 次调用, {len(code_artifacts)} artifacts  OK")
 
         # ---- 验证 3：modeler 推导链 ----
         # final 阶段: 1 base + 6 derivation + 1 consistency = 8 次

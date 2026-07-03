@@ -79,6 +79,25 @@ def main():
     assert "paper" in result2
     print("✓ 空 state 不崩")
 
+    # 6) Phase 2: 对比表注入 solution
+    from math_agent.state import CodeArtifact
+    s.code_artifacts = [
+        CodeArtifact(
+            purpose="无调度", code="", success=True,
+            stdout="RESULT: baseline=no_schedule total_cost=1500.0 service_rate=0.70",
+            category="baseline:no_schedule",
+        ),
+        CodeArtifact(
+            purpose="贪婪", code="", success=True,
+            stdout="RESULT: baseline=greedy total_cost=1100.0 service_rate=0.85",
+            category="baseline:greedy",
+        ),
+    ]
+    result_p2 = table_assembler_node(s)
+    assert "| 方案 |" in result_p2["paper"].solution, "对比表未注入 solution"
+    assert "无调度" in result_p2["paper"].solution
+    print("✓ 对比表注入 solution（Phase 2）")
+
     print("\n全部通过。")
     return 0
 
