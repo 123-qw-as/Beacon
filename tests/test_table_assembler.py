@@ -284,3 +284,28 @@ def test_comparison_table_handles_failed_baselines():
     assert "运行失败" in table
     assert "980.0" in table
 
+
+def test_table_assembler_node_injects_comparison_table():
+    """table_assembler 应把对比表注入 paper.solution。"""
+    from math_agent.state import MathModelingState, ModelVersion, PaperSections, CodeArtifact
+    s = MathModelingState(problem="test")
+    s.model_versions.append(ModelVersion(
+        stage="final", description="m", variables={"x": "v"},
+    ))
+    s.code_artifacts = [
+        CodeArtifact(
+            purpose="无调度", code="", success=True,
+            stdout="RESULT: baseline=no_schedule total_cost=1245.3 service_rate=0.82",
+            category="baseline:no_schedule",
+        ),
+        CodeArtifact(
+            purpose="贪婪", code="", success=True,
+            stdout="RESULT: baseline=greedy total_cost=980.0 service_rate=0.91",
+            category="baseline:greedy",
+        ),
+    ]
+    s.paper = PaperSections(solution="## 求解算法与流程\n求解过程。")
+    result = table_assembler_node(s)
+    assert "| 方案 |" in result["paper"].solution
+    assert "无调度" in result["paper"].solution
+
