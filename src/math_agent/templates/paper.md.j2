@@ -12,10 +12,10 @@
 ## 3. 符号说明
 {{ paper.notation }}
 
-## 4. 模型的建立与演化
+## 4. 模型的建立
 {{ paper.model_section }}
 
-## 5. 模型的求解
+## 5. 模型的求解与实验
 {{ paper.solution }}
 
 ## 6. 敏感性分析
@@ -33,20 +33,21 @@
 
 ---
 
-## 附录 A. 代码与运行输出
+## 附录 A. 关键算法代码
 {% for a in code_artifacts %}
-### A.{{ loop.index }} {{ a.purpose }}（success={{ a.success }}）
+{% if a.success %}
+### A.{{ loop.index }} {{ a.purpose }}
+
 ```python
-{{ a.code }}
+{{ a.curated_code }}
 ```
-**stdout**：
+
+{% if a.curated_stdout %}
+**关键输出摘要**：
 ```
-{{ a.stdout }}
+{{ a.curated_stdout }}
 ```
-{% if a.stderr %}**stderr**：
-```
-{{ a.stderr }}
-```
+{% endif %}
 {% endif %}
 {% endfor %}
 {% if figures %}

@@ -28,10 +28,10 @@
 \section{符号说明}
 {{ paper.notation }}
 
-\section{模型的建立与演化}
+\section{模型的建立}
 {{ paper.model_section }}
 
-\section{模型的求解}
+\section{模型的求解与实验}
 {{ paper.solution }}
 
 {% if figures %}
@@ -62,5 +62,26 @@
 
 \section*{参考文献}
 {{ paper.references }}
+
+{% if code_artifacts %}
+\appendix
+\section{关键算法代码}
+{% for art in code_artifacts %}
+{% if art.success %}
+\subsection{ {{- art.purpose -}} }
+\begin{lstlisting}[language=Python]
+{{ art.curated_code }}
+\end{lstlisting}
+
+{% if art.curated_stdout %}
+\subsubsection*{关键输出摘要}
+\begin{verbatim}
+{{ art.curated_stdout }}
+\end{verbatim}
+{% endif %}
+
+{% endif %}
+{% endfor %}
+{% endif %}
 
 \end{document}
