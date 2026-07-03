@@ -109,3 +109,42 @@ def _inject_table(section_text: str, title: str, table_md: str) -> str:
     if section_text and not section_text.endswith("\n"):
         section_text += "\n"
     return f"{section_text}\n{heading}\n\n{table_md}\n"
+
+
+from math_agent.state import MathModelingState, PaperSections
+
+
+# 要清洗的 section 字段名
+_SECTION_FIELDS = [
+    "abstract", "problem_restatement", "assumptions", "notation",
+    "model_section", "solution", "sensitivity", "conclusion", "references",
+]
+
+
+def table_assembler_node(state: MathModelingState) -> dict:
+    """writer/critic 循环后的后处理：注入表格 + 清洗禁用词。
+
+    返回增量 dict: {"paper": PaperSections, "table_warnings": list[str]}。
+    """
+    paper = state.paper.model_copy(deep=True)
+    warnings: list[str] = []
+
+    # 1) 生成并注入表格
+    final_model = next((m for m in reversed(state.model_versions) if m.stage == "final"),
+                       state.model_versions[-1] if state.model_versions else None)
+    if final_model and final_model.variables:
+        var_table = _generate_variable_table(final_model.variables)
+        paper.notation = _inject_table(paper.notation, "模型变量表", var_table)
+
+    sens_table = _generate_sensitivity_table(state.sensitivity_runs)
+    paper.sensitivity = _inject_table(paper.sensitivity, "敏感性结果汇总表", sens_table)
+
+    # 2) 禁用词清洗（所有 section）
+    for field in _SECTION_FIELDS:
+        text = getattr(paper, field, "")
+        if text:
+            cleaned, w = _clean_forbidden_words(text, field)
+            setattr(paper, field, cleaned)
+            warnings.extend(w)
+
+    return {"paper": paper, "table_warnings": warnings}

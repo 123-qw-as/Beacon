@@ -152,3 +152,63 @@ def test_inject_table_empty_table_returns_unchanged():
     result = _inject_table(text, "参数表", "")
     assert result == text
 
+
+from math_agent.state import MathModelingState, ModelVersion, PaperSections, SensitivityRun
+from math_agent.nodes.table_assembler import table_assembler_node
+
+
+def _state_for_assembler():
+    s = MathModelingState(problem="test")
+    s.model_versions.append(ModelVersion(
+        stage="final",
+        description="final model",
+        variables={"x_i": "调度量(件)", "d_i": "需求量", "alpha": "学习率"},
+    ))
+    s.sensitivity_runs.append(SensitivityRun(
+        parameter="alpha", values=[0.1, 0.5, 1.0],
+        metric="MAE", results=[10.0, 20.0, 30.0],
+    ))
+    s.paper = PaperSections(
+        model_section="基础预测模型：使用 XGBoost。PaperCritic 给了好评。",
+        notation="原有符号表",
+        sensitivity="敏感性分析正文",
+        solution="求解过程见代码1。Claim: 最优。",
+        conclusion="模型优点多。",
+    )
+    return s
+
+
+def test_table_assembler_node_injects_variable_table():
+    s = _state_for_assembler()
+    result = table_assembler_node(s)
+    new_paper = result["paper"]
+    assert "| 符号 | 含义 | 单位 |" in new_paper.notation
+    assert "x_i" in new_paper.notation
+
+
+def test_table_assembler_node_injects_sensitivity_table():
+    s = _state_for_assembler()
+    result = table_assembler_node(s)
+    new_paper = result["paper"]
+    assert "| 参数 | 取值范围 |" in new_paper.sensitivity
+    assert "alpha" in new_paper.sensitivity
+
+
+def test_table_assembler_node_cleans_forbidden_words():
+    s = _state_for_assembler()
+    result = table_assembler_node(s)
+    new_paper = result["paper"]
+    assert "PaperCritic" not in new_paper.model_section
+    assert "Claim" not in new_paper.solution
+    assert "代码1" not in new_paper.solution
+    assert len(result["table_warnings"]) >= 3
+
+
+def test_table_assembler_node_handles_empty_state():
+    s = MathModelingState(problem="empty")
+    s.paper = PaperSections()
+    result = table_assembler_node(s)
+    # 不崩，warnings 可能为空
+    assert "paper" in result
+    assert "table_warnings" in result
+
