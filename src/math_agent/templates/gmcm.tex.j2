@@ -34,10 +34,10 @@
 \section{符号说明}
 {{ paper.notation }}
 
-\section{模型的建立与求解}
+\section{模型的建立}
 {{ paper.model_section }}
 
-\subsection{求解过程与结果}
+\section{模型的求解与实验}
 {{ paper.solution }}
 
 {% if figures %}
@@ -76,17 +76,17 @@
 {% if code_artifacts %}
 \newpage
 \appendix
-\section{程序代码}
+\section{关键算法代码与说明}
 {% for art in code_artifacts %}
-\subsection[代码 {{ loop.index }}]{ {{- art.purpose -}} }
+\subsection{ {{- art.purpose -}} }
 \begin{lstlisting}[language=Python]
-{{ art.code }}
+{{ art.curated_code }}
 \end{lstlisting}
 
-{% if art.stdout %}
-\subsubsection*{运行输出}
+{% if art.curated_stdout %}
+\subsubsection*{关键输出摘要}
 \begin{verbatim}
-{{ art.stdout }}
+{{ art.curated_stdout }}
 \end{verbatim}
 {% endif %}
 
