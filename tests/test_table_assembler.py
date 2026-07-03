@@ -125,3 +125,30 @@ def test_sensitivity_table_empty():
     table = _generate_sensitivity_table([])
     assert table == ""
 
+
+from math_agent.nodes.table_assembler import _inject_table
+
+
+def test_inject_table_appends_when_absent():
+    text = "这是原有内容。"
+    table = "| A | B |\n|---|---|\n| 1 | 2 |"
+    result = _inject_table(text, "参数表", table)
+    assert "## 参数表" in result
+    assert "这是原有内容。" in result
+    assert "| A | B |" in result
+
+
+def test_inject_table_skips_when_already_present():
+    text = "原有内容。\n\n## 参数表\n\n已有表格"
+    table = "| A | B |\n|---|---|\n| 1 | 2 |"
+    result = _inject_table(text, "参数表", table)
+    # 不重复注入
+    assert result.count("## 参数表") == 1
+    assert "| A | B |" not in result
+
+
+def test_inject_table_empty_table_returns_unchanged():
+    text = "原有内容。"
+    result = _inject_table(text, "参数表", "")
+    assert result == text
+

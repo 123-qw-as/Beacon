@@ -94,3 +94,18 @@ def _generate_sensitivity_table(runs: list) -> str:
         rating = _sensitivity_rating(r.results)
         lines.append(f"| {r.parameter} | {vals} | {r.metric} | {res} | {rating} |")
     return "\n".join(lines)
+
+
+def _inject_table(section_text: str, title: str, table_md: str) -> str:
+    """把表格注入 section 文本末尾。若已含同名 ## title 则跳过（去重）。
+
+    table_md 为空则原样返回（表格生成器无数据时）。
+    """
+    if not table_md:
+        return section_text
+    heading = f"## {title}"
+    if heading in section_text:
+        return section_text  # 已存在，不重复注入
+    if section_text and not section_text.endswith("\n"):
+        section_text += "\n"
+    return f"{section_text}\n{heading}\n\n{table_md}\n"
