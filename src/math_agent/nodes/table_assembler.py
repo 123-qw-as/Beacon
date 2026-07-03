@@ -41,3 +41,27 @@ def _clean_forbidden_words(text: str, section: str) -> tuple[str, list[str]]:
             text = pattern.sub(replacement, text)
             warnings.append(f"[{section}] {pattern.pattern} → {replacement}")
     return text, warnings
+
+
+import re as _re  # 已有 import re，但 _UNIT_RE 需要独立引用
+
+_UNIT_RE = _re.compile(r"^(.*?)\s*[（(]([^()（）]+)[)）]\s*$")
+
+
+def _generate_variable_table(variables: dict[str, str]) -> str:
+    """从 model_versions[-1].variables 生成符号说明 markdown 表。
+
+    description 含括号单位则拆分（"需求量(件)" → 含义"需求量" / 单位"件"）。
+    返回空字符串如果 variables 为空。
+    """
+    if not variables:
+        return ""
+    lines = ["| 符号 | 含义 | 单位 |", "|---|---|---|"]
+    for name, desc in variables.items():
+        m = _UNIT_RE.match(desc)
+        if m:
+            meaning, unit = m.group(1).strip(), m.group(2).strip()
+        else:
+            meaning, unit = desc.strip(), "—"
+        lines.append(f"| {name} | {meaning} | {unit} |")
+    return "\n".join(lines)

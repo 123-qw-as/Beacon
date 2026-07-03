@@ -55,3 +55,32 @@ def test_clean_handles_empty_string():
     cleaned, warnings = _clean_forbidden_words("", "abstract")
     assert cleaned == ""
     assert warnings == []
+
+
+from math_agent.nodes.table_assembler import _generate_variable_table
+
+
+def test_variable_table_basic():
+    variables = {"x_i": "决策变量，第i个时段的调度量", "d_i": "需求量(件)", "alpha": "学习率"}
+    table = _generate_variable_table(variables)
+    assert "| 符号 | 含义 | 单位 |" in table
+    assert "|---|---|---|" in table
+    assert "x_i" in table
+    assert "决策变量，第i个时段的调度量" in table
+    assert "件" in table          # 从 "需求量(件)" 拆出单位
+    assert "—" in table           # alpha 无单位 → 填 —
+
+
+def test_variable_table_empty():
+    table = _generate_variable_table({})
+    assert table == ""
+
+
+def test_variable_table_no_unit_in_parens():
+    variables = {"s": "存量"}
+    table = _generate_variable_table({"s": "存量"})
+    lines = table.strip().split("\n")
+    # 表头 + 分隔行 + 1 数据行 = 3 行
+    assert len(lines) == 3
+    assert "—" in lines[2]        # 无单位
+
