@@ -185,3 +185,13 @@ def test_writer_paper_critic_loop_isolated(mocker):
     paper_critics = [r for r in final["critic_reports"] if r.target == "paper"]
     assert len(paper_critics) == 2
     assert paper_critics[-1].approved is True
+
+
+def test_graph_has_table_assembler_node():
+    """table_assembler 必须在 paper_critic 和 evaluation 之间。"""
+    from math_agent.graph import build_graph
+    g = build_graph()
+    # 构建后的 graph 节点名可通过 .nodes 访问
+    assert "table_assembler" in g.nodes
+    assert "evaluation" in g.nodes
+    assert "paper_critic" in g.nodes

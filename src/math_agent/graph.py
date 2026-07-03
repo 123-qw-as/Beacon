@@ -15,6 +15,7 @@ from math_agent.nodes.paper_critic import paper_critic_node
 from math_agent.nodes.evaluation import evaluation_node
 from math_agent.nodes.human_review import human_review_node
 from math_agent.nodes.latex import latex_node
+from math_agent.nodes.table_assembler import table_assembler_node
 from math_agent.routing import after_model_critic, after_paper_critic
 
 
@@ -58,6 +59,7 @@ def build_graph(
     g.add_node("evaluation", _wrap(evaluation_node, "evaluation"))
     g.add_node("human_review", _wrap(human_review_node, "human_review"))
     g.add_node("latex", _wrap(latex_node, "latex"))
+    g.add_node("table_assembler", _wrap(table_assembler_node, "table_assembler"))
 
     g.set_entry_point("analyst")
     g.add_edge("analyst", "modeler")
@@ -75,8 +77,9 @@ def build_graph(
     g.add_conditional_edges(
         "paper_critic",
         after_paper_critic,
-        {"retry": "writer", "advance": "evaluation"},
+        {"retry": "writer", "advance": "table_assembler"},
     )
+    g.add_edge("table_assembler", "evaluation")
     g.add_edge("evaluation", "human_review")
     g.add_edge("human_review", "latex")
     g.add_edge("latex", END)
