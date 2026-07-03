@@ -25,9 +25,12 @@ def test_coder_calls_once_per_figure_purpose(mocker, workdir):
     ))
     delta = coder_node(s)
 
-    assert len(delta["code_artifacts"]) == 3
-    assert spy.call_count == 3  # 每个图 1 次调用，全部首跑成功
-    assert all(a.success for a in delta["code_artifacts"])
+    # Phase 2 起主方案成功后还会追加 baseline 对照方案，按 figure prompt 过滤调用计数
+    figure_calls = [c for c in spy.call_args_list if "当前绘图任务" in c.args[0]]
+    figure_arts = [a for a in delta["code_artifacts"] if a.category == "figure"]
+    assert len(figure_arts) == 3
+    assert len(figure_calls) == 3  # 每个图 1 次调用，全部首跑成功
+    assert all(a.success for a in figure_arts)
 
 
 def test_coder_falls_back_to_single_call_without_figure_purposes(mocker, workdir):
@@ -40,8 +43,10 @@ def test_coder_falls_back_to_single_call_without_figure_purposes(mocker, workdir
     s.model_versions.append(ModelVersion(stage="final", description="the model"))
     delta = coder_node(s)
 
-    assert len(delta["code_artifacts"]) == 1
-    assert delta["code_artifacts"][0].success
+    # Phase 2 起会追加 baseline 对照方案；主方案 figure 仍应只有 1 个成功 artifact
+    figure_arts = [a for a in delta["code_artifacts"] if a.category == "figure"]
+    assert len(figure_arts) == 1
+    assert figure_arts[0].success
 
 
 def test_coder_retries_per_figure_independently(mocker, workdir):
@@ -59,7 +64,8 @@ def test_coder_retries_per_figure_independently(mocker, workdir):
     ))
     delta = coder_node(s)
 
-    arts = delta["code_artifacts"]
+    # Phase 2 起会追加 baseline 对照方案；按 figure category 过滤主方案 artifact
+    arts = [a for a in delta["code_artifacts"] if a.category == "figure"]
     assert len(arts) == 3  # fig0 失败 + fig0 成功 + fig1 成功
     assert arts[0].success is False
     assert arts[1].success is True
@@ -125,6 +131,7 @@ def test_coder_figure_one_prompt_contains_purpose(mocker, workdir):
     ))
     coder_node(s)
 
-    prompt = spy.call_args.args[0]
+    # Phase 2 起主方案后会追加 baseline 调用；figure prompt 仍是第一个调用
+    prompt = spy.call_args_list[0].args[0]
     assert "需求时序图" in prompt
     assert "当前绘图任务" in prompt

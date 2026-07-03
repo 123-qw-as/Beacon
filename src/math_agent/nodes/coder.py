@@ -7,6 +7,7 @@ from math_agent.llm import complete
 from math_agent.config import MODEL_ROUTING
 from math_agent.prompts.coder import SYSTEM, build_prompt  # noqa: F401  (build_prompt kept for backward compat)
 from math_agent.prompts.coder_figure_one import build_prompt_figure_one
+from math_agent.prompts.coder_baseline import BASELINE_SPECS, build_baseline_prompt
 from math_agent.state import MathModelingState, CodeArtifact
 from math_agent.tools.runner import run_python
 
@@ -54,6 +55,47 @@ def coder_node(state: MathModelingState) -> dict:
                 break
             prev_err = result.stderr
             prev_kind = result.error_kind
+
+    # ---- Phase 2: 对照方案运行 ----
+    # 取最后一个成功的主方案代码作为基础
+    main_code = next((a.code for a in reversed(artifacts) if a.success), "")
+    if main_code:
+        for name, category, instruction in BASELINE_SPECS:
+            try:
+                baseline_draft: CoderDraft = complete(
+                    build_baseline_prompt(state.problem, main_code, name, category, instruction),
+                    schema=CoderDraft,
+                    system=SYSTEM,
+                    model=MODEL_ROUTING["coder"],
+                )
+                baseline_result = run_python(
+                    baseline_draft.code,
+                    workdir=workdir / f"baseline_{category}",
+                    timeout=300,
+                )
+                artifacts.append(
+                    CodeArtifact(
+                        purpose=baseline_draft.purpose,
+                        code=baseline_draft.code,
+                        stdout=baseline_result.stdout,
+                        stderr=baseline_result.stderr,
+                        success=baseline_result.success,
+                        artifact_paths=baseline_result.artifact_paths,
+                        category=f"baseline:{category}",
+                    )
+                )
+            except Exception as e:
+                # 对照方案失败不阻断主流程
+                artifacts.append(
+                    CodeArtifact(
+                        purpose=f"{name}对照方案（失败）",
+                        code="",
+                        stdout="",
+                        stderr=str(e)[:500],
+                        success=False,
+                        category=f"baseline:{category}",
+                    )
+                )
 
     delta: dict = {"code_artifacts": artifacts}
     if not any(a.success for a in artifacts):

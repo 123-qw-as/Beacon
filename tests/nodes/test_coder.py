@@ -23,8 +23,9 @@ def test_coder_retries_once_on_failure(mocker, workdir):
     s = MathModelingState(problem="p", output_dir=str(workdir))
     s.model_versions.append(ModelVersion(stage="final", description="d"))
     delta = coder_node(s)
-    # 应当保留两个 artifact：第一次失败、第二次成功
-    arts = delta["code_artifacts"]
+    # 应当保留两个 figure artifact：第一次失败、第二次成功
+    # （Phase 2 起主方案成功后还会追加 baseline 对照方案，按 category 过滤）
+    arts = [a for a in delta["code_artifacts"] if a.category == "figure"]
     assert len(arts) == 2
     assert arts[0].success is False
     assert arts[1].success is True
