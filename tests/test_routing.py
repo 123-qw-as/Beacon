@@ -1,4 +1,4 @@
-from math_agent.state import MathModelingState, ModelVersion, CriticReport
+from math_agent.state import MathModelingState, ModelVersion, CriticReport, CriticIssue
 from math_agent.routing import after_model_critic, after_paper_critic
 
 
@@ -33,7 +33,7 @@ def _state_with_paper_critic(score: int, approved: bool, writer_iter: int):
     s.writer_iteration = writer_iter
     s.critic_reports.append(CriticReport(
         target="paper", score=score, approved=approved,
-        issues=["编造数字"], suggestions=["核对附录"],
+        issues=[CriticIssue(section="general", problem="编造数字")], suggestions=["核对附录"],
     ))
     return s
 

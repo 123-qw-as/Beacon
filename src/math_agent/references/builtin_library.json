@@ -1,0 +1,92 @@
+[
+  {
+    "id": "seed-001",
+    "title": "Queueing Systems, Volume 1: Theory",
+    "authors": ["Leonard Kleinrock"],
+    "venue": "Wiley-Interscience",
+    "year": 1975,
+    "doi": "",
+    "domains": ["queueing", "probability", "generic"]
+  },
+  {
+    "id": "seed-002",
+    "title": "Time Series Analysis: Forecasting and Control",
+    "authors": ["George E. P. Box", "Gwilym M. Jenkins", "Gregory C. Reinsel"],
+    "venue": "Wiley",
+    "year": 2008,
+    "doi": "",
+    "domains": ["time_series", "generic"]
+  },
+  {
+    "id": "seed-003",
+    "title": "Convex Optimization",
+    "authors": ["Stephen Boyd", "Lieven Vandenberghe"],
+    "venue": "Cambridge University Press",
+    "year": 2004,
+    "doi": "",
+    "domains": ["optimization", "generic"]
+  },
+  {
+    "id": "seed-004",
+    "title": "Nonlinear Programming",
+    "authors": ["Dimitri P. Bertsekas"],
+    "venue": "Athena Scientific",
+    "year": 2016,
+    "doi": "",
+    "domains": ["optimization"]
+  },
+  {
+    "id": "seed-005",
+    "title": "Deep Learning",
+    "authors": ["Ian Goodfellow", "Yoshua Bengio", "Aaron Courville"],
+    "venue": "MIT Press",
+    "year": 2016,
+    "doi": "",
+    "domains": ["machine_learning"]
+  },
+  {
+    "id": "seed-006",
+    "title": "The Elements of Statistical Learning: Data Mining, Inference, and Prediction",
+    "authors": ["Trevor Hastie", "Robert Tibshirani", "Jerome Friedman"],
+    "venue": "Springer",
+    "year": 2009,
+    "doi": "",
+    "domains": ["machine_learning", "probability"]
+  },
+  {
+    "id": "seed-007",
+    "title": "Graph Theory",
+    "authors": ["Reinhard Diestel"],
+    "venue": "Springer",
+    "year": 2017,
+    "doi": "",
+    "domains": ["graph"]
+  },
+  {
+    "id": "seed-008",
+    "title": "Simulation Modeling and Analysis",
+    "authors": ["Averill M. Law", "W. David Kelton"],
+    "venue": "McGraw-Hill",
+    "year": 2000,
+    "doi": "",
+    "domains": ["simulation", "generic"]
+  },
+  {
+    "id": "seed-009",
+    "title": "Introduction to Probability Models",
+    "authors": ["Sheldon M. Ross"],
+    "venue": "Academic Press",
+    "year": 2014,
+    "doi": "",
+    "domains": ["probability", "simulation", "queueing"]
+  },
+  {
+    "id": "seed-010",
+    "title": "Operations Research: Applications and Algorithms",
+    "authors": ["Wayne L. Winston"],
+    "venue": "Cengage Learning",
+    "year": 2004,
+    "doi": "",
+    "domains": ["optimization", "simulation", "generic"]
+  }
+]

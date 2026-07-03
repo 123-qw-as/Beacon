@@ -1,0 +1,86 @@
+# 章节撰写：摘要 + 问题重述 + 关键词
+
+本轮你**只**撰写三个字段：`abstract`、`problem_restatement`、`keywords`。其余章节由其他轮次处理，不要输出。
+
+{% include 'writer_iron_rules.md.j2' %}
+
+---
+
+## 本段大纲锚点
+- 摘要锚点：{{ outline_abstract }}
+- 问题重述锚点：{{ outline_problem_restatement }}
+
+---
+
+## 题目
+{{ problem }}
+
+## 已确认假设（{{ assumptions | length }} 条，此处仅供摘要引用，详细论证见假设章节）
+{% for a in assumptions %}
+- {{ loop.index }}. {{ a.statement }}
+{% endfor %}
+
+## 模型演化（概览）
+{% for m in model_versions %}
+- [{{ m.stage }}] {{ m.description[:80] }}
+{% endfor %}
+
+## 代码运行结果（末尾摘要）
+{% for a in code_artifacts %}
+- [{{ loop.index }}] {{ a.purpose }} — success={{ a.success }}
+```
+{{ a.stdout[-200:] }}
+```
+{% endfor %}
+
+## 图表数量
+共 {{ figures | length }} 张图。
+
+---
+
+{% if prior_critic %}
+## 上一轮 PaperCritic 反馈（必须逐条回应）
+
+PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.approved }}。
+
+**issues**（仅与本段相关，其余可忽略）：
+{% for i in prior_critic.issues %}
+- [{{ i.section }}] {{ i.problem }}
+{% endfor %}
+
+本次重写时**必须**逐条回应上述与本段相关的 issues；不能简单复述上一稿。
+{% endif %}
+
+---
+
+## 各字段字数预算与结构要求
+
+| 字段 | 字数区间 | 强制结构 |
+|---|---|---|
+| `abstract` | 400–600 | 4 个要素：问题—方法—**关键数字结果**—创新点；至少出现 1 个具体数字 |
+| `problem_restatement` | 800–1200 | 必须包含：(1) 背景与实际意义（2-3段），(2) 题目条件提炼，(3) 明示「决策变量 / 目标 / 约束」三要素，(4) 需要解决的核心问题分析。**禁止简单复述题目**，要用建模语言重新表述。 |
+| `keywords` | 5 个关键词 | 逗号分隔，具体不空泛 |
+
+`keywords`：5 个具体关键词，逗号分隔，例如 `"混合整数规划, 时空图神经网络, 条件风险价值, 敏感性分析, 共享单车"`。**禁止**写成空泛词如"数学建模/优化/多智能体"。
+
+{% if retrieved_context %}
+
+---
+
+## 检索到的参考资料（仅供启发，不可照抄）
+{{ retrieved_context }}
+{% endif %}
+
+---
+
+## 输出契约
+
+请返回严格符合下列 schema 的 JSON（**不得包含其他键**）：
+
+```json
+{
+  "abstract": str,
+  "problem_restatement": str,
+  "keywords": str
+}
+```

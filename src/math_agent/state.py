@@ -23,12 +23,34 @@ class Assumption(BaseModel):
     sensitivity_relevant: bool = False  # Plan B: sensitivity 节点消费该字段
 
 
+class DerivationStep(BaseModel):
+    """模型推导链中的一步（动机 → 数学陈述 → 结果）。"""
+    title: str                       # "参数估计" / "约束推导" / "等价变换"
+    motivation: str                  # 为何做这步
+    statement: str                   # 数学陈述（含 inline LaTeX）
+    result: str = ""                 # 推导结论
+
+
 class ModelVersion(BaseModel):
     stage: ModelStage
     description: str
     equations: list[str] = Field(default_factory=list)
     variables: dict[str, str] = Field(default_factory=dict)
     notes: str = ""
+    figure_purposes: list[str] = Field(default_factory=list)  # Plan D：modeler 建议要画的图
+    derivation_steps: list[DerivationStep] = Field(default_factory=list)
+    derivation_notes: str = ""  # Plan D：self-consistency gate 产出的问题标注
+
+
+class Reference(BaseModel):
+    """真实文献条目。来源：Semantic Scholar API 或静态库。"""
+    id: str                        # Semantic Scholar paperId 或静态库自定义 id
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    venue: str = ""
+    year: int = 0
+    doi: str = ""
+    domains: list[str] = Field(default_factory=list)  # problem_domains 交集标记
 
 
 class CodeArtifact(BaseModel):
@@ -40,10 +62,19 @@ class CodeArtifact(BaseModel):
     artifact_paths: list[str] = Field(default_factory=list)  # 生成的图、数据等
 
 
+class CriticIssue(BaseModel):
+    """结构化评审意见，section 字段限定到固定 enum。"""
+    section: Literal[
+        "abstract", "problem_restatement", "assumptions", "notation",
+        "model_section", "solution", "sensitivity", "conclusion", "references", "general",
+    ] = "general"
+    problem: str
+
+
 class CriticReport(BaseModel):
     target: Literal["analyst", "modeler", "coder", "writer", "paper"]
     score: int  # 0-10
-    issues: list[str] = Field(default_factory=list)
+    issues: list[CriticIssue] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
     approved: bool = False
     # stage 标记 critic 是针对哪个建模阶段产生的；analyst/coder/writer/paper 类型可为 None
@@ -123,6 +154,7 @@ class MathModelingState(BaseModel):
     iteration: int = 0
     writer_iteration: int = 0           # 写作阶段的重试计数（paper_critic 闭环用）
     stage_target: ModelStage = "basic"  # 当前要产出的阶段
+    problem_domains: list[str] = Field(default_factory=list)  # Plan D: analyst 输出，writer references 用
     errors: Annotated[list[str], add] = Field(default_factory=list)
 
     # 输出

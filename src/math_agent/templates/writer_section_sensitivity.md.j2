@@ -1,0 +1,75 @@
+# 章节撰写：敏感性分析
+
+本轮你**只**撰写一个字段：`sensitivity`。其余章节由其他轮次处理，不要输出。
+
+{% include 'writer_iron_rules.md.j2' %}
+
+---
+
+## 本段大纲锚点
+{{ outline_sensitivity }}
+
+---
+
+## 敏感性分析结果
+{% if sensitivity_runs %}
+{% for r in sensitivity_runs %}
+- **参数 `{{ r.parameter }}`**：在取值 {{ r.values }} 下，指标 `{{ r.metric }}` = {{ r.results }}
+  - 解读：{{ r.interpretation or "（未提供解读）" }}
+{% endfor %}
+{% else %}
+（暂无敏感性结果——sensitivity 章节应说明「未执行敏感性分析」并给出定性讨论）
+{% endif %}
+
+## 代码运行结果（末尾摘要，供数字追溯）
+{% for a in code_artifacts %}
+### [{{ loop.index }}] {{ a.purpose }} — success={{ a.success }}
+```
+{{ a.stdout[-300:] }}
+```
+{% endfor %}
+
+---
+
+{% if prior_critic %}
+## 上一轮 PaperCritic 反馈（必须逐条回应）
+
+PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.approved }}。
+
+**issues**（仅与本段相关，其余可忽略）：
+{% for i in prior_critic.issues %}
+- [{{ i.section }}] {{ i.problem }}
+{% endfor %}
+
+本次重写时**必须**逐条回应上述与本段相关的 issues；不能简单复述上一稿。
+{% endif %}
+
+---
+
+## 字段字数预算与结构要求
+
+| 字段 | 字数区间 | 强制结构 |
+|---|---|---|
+| `sensitivity` | 1000–1800 | 须包含：(1) 敏感性分析方法说明（为何选这些参数、扰动范围设定依据），(2) **参数敏感度排序**（逐参数分析，每个参数含变化趋势 + 数值 + 图表引用「如图 B.Y 所示」），(3) 至少 2 条结论性断言（含鲁棒性判断），(4) 管理建议或参数调节策略。 |
+
+**IRON RULE 1（禁编造）铁律**：sensitivity 中的所有数字必须可在上方「敏感性分析结果」或「代码运行结果」中追溯。
+
+{% if retrieved_context %}
+
+---
+
+## 检索到的参考资料（仅供启发，不可照抄）
+{{ retrieved_context }}
+{% endif %}
+
+---
+
+## 输出契约
+
+请返回严格符合下列 schema 的 JSON（**不得包含其他键**）：
+
+```json
+{
+  "sensitivity": str
+}
+```

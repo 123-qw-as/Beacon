@@ -16,9 +16,18 @@ def build_prompt(problem, assumptions, prev_model, stage, critic_feedback=None,
     fb = ""
     if critic_feedback:
         fb = "\n# 上一版 Critic 反馈\n" + "\n".join(
-            f"- 问题: {i}" for i in critic_feedback.issues
+            f"- 问题: {i.problem}" for i in critic_feedback.issues
         ) + "\n" + "\n".join(f"- 建议: {s}" for s in critic_feedback.suggestions)
     ctx = f"\n{retrieved_context}\n" if retrieved_context else ""
+
+    # Plan D Phase 3：final 阶段才要求 figure_purposes（basic/improved 不需要图，
+    # 字段在 ModelVersion 里默认空 list，prompt 也不提及，避免污染早期建模）
+    figure_clause = ""
+    if stage == "final":
+        figure_clause = (
+            f"  \"figure_purposes\": [str, ...], # 5-10 个图任务，每个是一句话描述要画的图，"
+            f"如 '需求时序图', '调度路径图', '成本构成饼图', '敏感性曲线'\n"
+        )
 
     return (
         f"# 题目\n{problem}\n\n# 当前阶段\n{stage}\n\n"
@@ -29,6 +38,7 @@ def build_prompt(problem, assumptions, prev_model, stage, critic_feedback=None,
         f"  \"description\": str,        # 模型定位与核心思路，>= 200 字\n"
         f"  \"equations\": [str, ...],   # LaTeX 字符串\n"
         f"  \"variables\": {{name: meaning}},\n"
+        f"{figure_clause}"
         f"  \"notes\": str               # 与上一版的区别（basic 阶段可为空）\n"
         f"}}"
     )

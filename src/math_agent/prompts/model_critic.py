@@ -13,5 +13,5 @@ def build_prompt(problem, assumptions, model):
     return (
         f"# 题目\n{problem}\n\n# 假设\n{asum}\n\n# 模型（{model.stage}）\n"
         f"{model.description}\n方程：\n{eqs}\n\n"
-        f"请输出 JSON：{{\"target\":\"modeler\",\"score\":int,\"issues\":[str],\"suggestions\":[str],\"approved\":bool}}"
+        f"请输出 JSON：{{\"target\":\"modeler\",\"score\":int,\"issues\":[{{\"section\":\"general\",\"problem\":str}}, ...],\"suggestions\":[str],\"approved\":bool}}"
     )

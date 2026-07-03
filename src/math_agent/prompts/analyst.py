@@ -17,6 +17,8 @@ def build_prompt(problem: str, background: str, questions: list[str],
         f"# 小问\n{qs}\n\n"
         f"{ctx}"
         f"请输出 JSON：{{\n"
-        f"  \"assumptions\": [{{\"statement\": str, \"rationale\": str}}, ...]\n"
+        f"  \"assumptions\": [{{\"statement\": str, \"rationale\": str}}, ...],\n"
+        f"  \"problem_domains\": [str, ...]  # 从下列固定集合中选取 1-3 个："
+        f"['optimization', 'time_series', 'machine_learning', 'graph', 'probability', 'queueing', 'simulation', 'generic']\n"
         f"}}，至少 5 条假设。"
     )

@@ -3,13 +3,14 @@ from pathlib import Path
 
 from math_agent.graph import build_graph
 from math_agent.state import (
-    Assumption, ModelVersion, CriticReport, PaperSections,
-    SensitivityRun, FigureArtifact, EvaluationReport, HumanDecision,
+    Assumption, ModelVersion, CriticReport, CriticIssue, PaperSections,
+    EvaluationReport, HumanDecision, DerivationStep,
 )
 from math_agent.nodes.analyst import AnalystOutput
 from math_agent.nodes.coder import CoderDraft
 from math_agent.nodes.sensitivity import SensitivityPlan, SensitivityCode, Interpretations
 from math_agent.nodes.figure_pipeline import FigureCriticOut, FigureAnalysisOut
+from math_agent.prompts.modeler_derivation import ConsistencyCheck
 
 
 def _png(p: Path):
@@ -25,8 +26,19 @@ def _full_mocks(mocker, workdir, *, stages=("basic", "improved", "final"), criti
                      Assumption(statement="A", rationale="r", sensitivity_relevant=True)]))
 
     stage_iter = iter(stages)
-    mocker.patch("math_agent.nodes.modeler.complete",
-                 side_effect=lambda *a, **k: ModelVersion(stage=next(stage_iter), description="d"*200))
+
+    def _modeler_complete(prompt, *, schema, **kw):
+        # final 阶段会额外调用 derivation steps + consistency gate，
+        # 需按请求的 schema 返回正确类型，否则解析出错。
+        if schema is ModelVersion:
+            return ModelVersion(stage=next(stage_iter), description="d" * 200)
+        if schema is DerivationStep:
+            return DerivationStep(title="step", motivation="m", statement="s", result="r")
+        if schema is ConsistencyCheck:
+            return ConsistencyCheck(coherent=True, issues=[])
+        return ModelVersion(stage="basic", description="d" * 200)
+
+    mocker.patch("math_agent.nodes.modeler.complete", side_effect=_modeler_complete)
 
     crit_iter = iter(critics) if critics else None
     if crit_iter is not None:
@@ -126,25 +138,35 @@ def test_graph_writes_paper_md(mocker, workdir):
 
 
 def test_writer_paper_critic_loop_isolated(mocker):
-    """隔离测试 writer↔paper_critic 闭环。第一次 critic 拒，第二次通过 → writer 调 2 次。"""
+    """隔离测试 writer↔paper_critic 闭环。第一次 critic 拒，第二次通过 → writer 调 2 次。
+
+    Plan D Phase 2：writer_node 改为大纲(1)+分章(7) 多调用。
+    首轮 8 次，重试轮（section=general → 全部分组）7 次，共 15 次 complete。
+    用 side_effect 按调用顺序返回：1 outline + 7 v1 分章 + 7 v2 分章。
+    """
     from langgraph.graph import StateGraph, END
     from math_agent.state import MathModelingState as _S
     from math_agent.nodes.writer import writer_node
     from math_agent.nodes.paper_critic import paper_critic_node
     from math_agent.routing import after_paper_critic
+    from math_agent.prompts.writer_section import (
+        WriterOutline, writer_sections, schema_for_group,
+    )
 
-    paper_v1 = PaperSections(abstract="v1"*100, problem_restatement="x"*150,
-                             assumptions="x"*150, notation="x"*150,
-                             model_section="x"*400, solution="x"*200,
-                             sensitivity="x"*150, conclusion="x"*150, references="-")
-    paper_v2 = PaperSections(abstract="v2"*100, problem_restatement="x"*150,
-                             assumptions="x"*150, notation="x"*150,
-                             model_section="x"*400, solution="x"*200,
-                             sensitivity="x"*150, conclusion="x"*150, references="-")
-    mocker.patch("math_agent.nodes.writer.complete", side_effect=[paper_v1, paper_v2])
+    def _paper(mk):
+        return PaperSections(abstract=mk * 100, problem_restatement="x" * 150,
+                             assumptions="x" * 150, notation="x" * 150,
+                             model_section="x" * 400, solution="x" * 200,
+                             sensitivity="x" * 150, conclusion="x" * 150, references="-")
+
+    outline = WriterOutline(abstract="thesis")
+    # 首轮：1 大纲 + 7 分章（v1）
+    # 重试轮：7 分章（v2）
+    seq = [outline] + [_paper("v1")] * 7 + [_paper("v2")] * 7
+    mocker.patch("math_agent.nodes.writer.complete", side_effect=seq)
     mocker.patch("math_agent.nodes.paper_critic.complete", side_effect=[
         CriticReport(target="paper", score=4, approved=False,
-                     issues=["编数字"], suggestions=["改定性"]),
+                     issues=[CriticIssue(problem="编数字")], suggestions=["改定性"]),
         CriticReport(target="paper", score=9, approved=True),
     ])
 

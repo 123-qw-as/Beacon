@@ -214,6 +214,11 @@ def complete(
         content = raw.choices[0].message.content or ""
         if schema is None:
             return content
+        # LLM 在 JSON 字符串里输出 LaTeX 命令 \beta/\big/\bf 时，\b 是合法 JSON
+        # 转义（backspace），json.loads 把 "\beta" 解析成 0x08+eta，丢了反斜杠。
+        # 修复：在 raw JSON 里把 \b+字母 的反斜杠双写为 \\b+字母，让 json.loads
+        # 保留字面反斜杠。\b 不跟字母时（真正的 backspace 意图）不动。
+        content = content.replace("\\b", "\\\\b")
         try:
             return schema.model_validate_json(content)
         except (ValidationError, json.JSONDecodeError) as e:

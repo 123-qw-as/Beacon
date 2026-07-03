@@ -114,10 +114,10 @@ def test_prompt_contains_iron_rules():
 
 def test_prompt_contains_word_budget_per_section():
     p = build_prompt(_rich_state())
-    # 关键预算锚点
-    assert "250–400" in p          # abstract
-    assert "800–1500" in p         # model_section
-    assert "300–600" in p          # sensitivity
+    # 关键预算锚点（Plan D: 大幅提升字数下限以保证正文 ≥20 页）
+    assert "400–600" in p          # abstract
+    assert "3000–5000" in p        # model_section
+    assert "1000–1800" in p        # sensitivity
 
 
 def test_prompt_contains_chinese_style_blocklist():
@@ -145,12 +145,12 @@ def test_writer_increments_writer_iteration(mocker):
 
 
 def test_prompt_includes_prior_paper_critic_feedback():
-    from math_agent.state import CriticReport
+    from math_agent.state import CriticReport, CriticIssue
     s = _rich_state()
     s.writer_iteration = 1
     s.critic_reports.append(CriticReport(
         target="paper", score=4, approved=False,
-        issues=["solution 段的 46 秒数字未在 stdout 中出现"],
+        issues=[CriticIssue(section="solution", problem="solution 段的 46 秒数字未在 stdout 中出现")],
         suggestions=["要么删掉数字，要么改成定性描述"],
     ))
     p = build_prompt(s)

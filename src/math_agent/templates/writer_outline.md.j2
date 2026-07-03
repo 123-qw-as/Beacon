@@ -1,0 +1,60 @@
+# 论文大纲生成（Pass 1：章节论点锚点）
+
+你是国赛 O 奖论文主笔。本轮只需为论文的每个章节写一段 2-3 句的**核心论点（thesis）**，
+作为后续逐章扩写的锚点。不要写正文，只写每章的核心主张与衔接思路。
+
+{% include 'writer_iron_rules.md.j2' %}
+
+---
+
+## 题目
+{{ problem }}
+
+## 模型演化（概览）
+{% for m in model_versions %}
+- [{{ m.stage }}] {{ m.description[:80] }}
+{% if m.equations %}  方程：{{ m.equations | join(" ; ") }}{% endif %}
+{% endfor %}
+{% if not model_versions %}（暂无模型，请基于题目给出最可能的研究方向）{% endif %}
+
+---
+
+## 任务
+
+为下列每个章节给出 2-3 句的核心论点。每条论点必须：
+- 包含该章节要论证的**主结论**（可被证伪）；
+- 点出与其他章节的**衔接**（如「承接 model_section 的 X，在 solution 中验证」）；
+- 若已有模型/结果，引用关键变量或指标名（不编造数字）。
+
+章节列表与字数提示：
+- `abstract`：问题—方法—关键结果方向—创新点（2-3 句）
+- `problem_restatement`：决策变量 / 目标 / 约束三要素（2-3 句）
+- `assumptions`：列出关键假设方向（2-3 句）
+- `notation`：要覆盖哪些核心符号（2-3 句）
+- `model_section`：basic→improved→final 的递进逻辑（2-3 句）
+- `solution`：求解方法 + 核心结果口径（2-3 句）
+- `sensitivity`：敏感参数 + 结论性断言方向（2-3 句）
+- `conclusion`：优点 / 缺点 / 推广方向（2-3 句）
+- `references`：参考文献来源方向（2-3 句）
+
+---
+
+## 输出契约
+
+请返回严格符合下列 schema 的 JSON（**不得包含其他键**）：
+
+```json
+{
+  "abstract": str,
+  "problem_restatement": str,
+  "assumptions": str,
+  "notation": str,
+  "model_section": str,
+  "solution": str,
+  "sensitivity": str,
+  "conclusion": str,
+  "references": str
+}
+```
+
+每个值为 2-3 句的中文论点字符串。**不要输出正文段落，只写论点锚点。**

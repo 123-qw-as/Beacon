@@ -16,7 +16,7 @@ def build_prompt(paper, figures, sensitivity_runs, paper_critic):
     crit_summary = "（无 PaperCritic 报告）"
     if paper_critic:
         crit_summary = (
-            f"score={paper_critic.score}; issues={paper_critic.issues[:5]}; "
+            f"score={paper_critic.score}; issues={[i.problem for i in paper_critic.issues[:5]]}; "
             f"suggestions={paper_critic.suggestions[:5]}"
         )
     return (

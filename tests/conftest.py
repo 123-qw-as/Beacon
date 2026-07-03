@@ -25,6 +25,21 @@ def _disable_rag_by_default(monkeypatch):
             pass
 
 
+@pytest.fixture(autouse=True)
+def _disable_scholar_network_by_default(monkeypatch):
+    """默认禁用 Semantic Scholar 网络调用，避免 writer 等测试真打外网（慢/flaky）。
+
+    writer_node 调用 select_references → search_references；这里默认把
+    references 模块绑定的 search_references 替换为返回空列表，writer 自动回退到静态库。
+    - 需要 API 行为的测试（test_references.py）用 mocker.patch 显式覆盖，
+      mocker.patch 优先级高于 monkeypatch，不受影响。
+    - test_scholar.py 直接测 scholar.search_references 本身（mock requests.get），
+      不经过 references 模块，因此不受本 fixture 影响。
+    """
+    import math_agent.tools.references as _refs
+    monkeypatch.setattr(_refs, "search_references", lambda *a, **k: [])
+
+
 @pytest.fixture
 def sample_problem():
     p = Path(__file__).parent / "fixtures" / "sample_problem.json"

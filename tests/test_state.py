@@ -2,7 +2,9 @@ from math_agent.state import (
     MathModelingState,
     Assumption,
     ModelVersion,
+    DerivationStep,
     CriticReport,
+    CriticIssue,
     PaperSections,
     SensitivityRun,
     FigureArtifact,
@@ -31,7 +33,7 @@ def test_state_can_record_critic():
         CriticReport(
             target="modeler",
             score=7,
-            issues=["假设过强"],
+            issues=[CriticIssue(section="general", problem="假设过强")],
             suggestions=["放宽到时变需求"],
             stage="basic",
         )
@@ -95,3 +97,43 @@ def test_state_has_human_decision_default_none():
 def test_writer_iteration_defaults_to_zero():
     s = MathModelingState(problem="x")
     assert s.writer_iteration == 0
+
+
+def test_model_version_has_figure_purposes_default_empty():
+    from math_agent.state import ModelVersion
+    m = ModelVersion(stage="final", description="d")
+    assert m.figure_purposes == []
+    m.figure_purposes.append("需求时序图")
+    assert m.figure_purposes == ["需求时序图"]
+
+
+def test_derivation_step_carries_step_metadata():
+    from math_agent.state import DerivationStep
+    d = DerivationStep(
+        title="参数估计",
+        motivation="为何用 MLE",
+        statement="对数似然 \\ell(\\theta)=...",
+        result="\\hat\\theta = ...",
+    )
+    assert d.title == "参数估计"
+    assert d.motivation.startswith("为何")
+    assert d.statement == "对数似然 \\ell(\\theta)=..."
+    assert d.result == "\\hat\\theta = ..."
+    assert d.result.startswith("\\hat")
+    assert d.statement == "对数似然 \\ell(\\theta)=..."
+    assert d.result == "\\hat\\theta = ..."
+
+
+def test_critic_issue_defaults_section_to_general():
+    ci = CriticIssue(problem="数字编造")
+    assert ci.section == "general"
+    assert ci.problem == "数字编造"
+
+
+def test_critic_report_accepts_structured_issues():
+    r = CriticReport(
+        target="paper", score=4, approved=False,
+        issues=[CriticIssue(section="solution", problem="46秒数字未在stdout出现")],
+    )
+    assert r.issues[0].section == "solution"
+    assert r.issues[0].problem.startswith("46秒")
