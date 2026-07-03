@@ -137,3 +137,10 @@ def test_critic_report_accepts_structured_issues():
     )
     assert r.issues[0].section == "solution"
     assert r.issues[0].problem.startswith("46秒")
+
+
+def test_state_has_table_warnings_field():
+    """table_assembler writes cleaning warnings here; evaluation/latex can read them."""
+    s = MathModelingState(problem="x")
+    assert hasattr(s, "table_warnings")
+    assert s.table_warnings == []

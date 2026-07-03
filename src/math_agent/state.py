@@ -156,6 +156,8 @@ class MathModelingState(BaseModel):
     stage_target: ModelStage = "basic"  # 当前要产出的阶段
     problem_domains: list[str] = Field(default_factory=list)  # Plan D: analyst 输出，writer references 用
     errors: Annotated[list[str], add] = Field(default_factory=list)
+    # table_assembler 产出的清洗/注入警告（覆盖语义；每次 table_assembler 运行整体替换）
+    table_warnings: list[str] = Field(default_factory=list)
 
     # 输出
     output_dir: Optional[str] = None
