@@ -56,6 +56,8 @@ _UNICODE_MATH_MAP = {
     "∑": r"\sum", "∏": r"\prod", "∫": r"\int",
     "∞": r"\infty", "∂": r"\partial", "∇": r"\nabla",
     "→": r"\to", "←": r"\leftarrow", "↔": r"\leftrightarrow",
+    # 上标 unicode
+    "²": r"^2", "³": r"^3", "¹": r"^1", "⁰": r"^0",
 }
 
 
@@ -111,8 +113,11 @@ _KNOWN_MATH_CMDS = frozenset({
     # 二元关系
     "leq", "geq", "neq", "leqslant", "geqslant", "approx", "sim", "propto",
     "equiv", "in", "notin", "subset", "supset", "cup", "cap",
+    "subseteq", "supseteq", "subsetneq", "supsetneq", "nsubseteq", "nsupseteq",
+    "subsetneqq", "supsetneqq",
     # 二元/一元算子
     "cdot", "cdotp", "times", "div", "pm", "mp", "ast", "star", "circ",
+    "ll", "gg", "lll", "ggg",
     # 大运算符
     "sum", "prod", "int", "iint", "iiint", "oint", "bigcup", "bigcap",
     "lim", "sup", "inf", "max", "min", "arg",
@@ -124,9 +129,15 @@ _KNOWN_MATH_CMDS = frozenset({
     # 希腊字母（大写）
     "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon",
     "Phi", "Psi", "Omega",
+    # 箭头
+    "to", "leftarrow", "rightarrow", "leftrightarrow",
+    "Leftarrow", "Rightarrow", "Leftrightarrow",
+    "longrightarrow", "Longrightarrow", "longleftarrow", "Longleftarrow",
+    "mapsto", "hookrightarrow", "hookleftarrow",
     # 常用符号
     "infty", "partial", "nabla", "forall", "exists", "emptyset", "hbar",
     "ell", "Re", "Im", "aleph", "cdots", "ldots", "vdots", "ddots",
+    "square", "blacksquare", "qed",
     # 字体/装饰
     "hat", "bar", "tilde", "vec", "dot", "ddot", "overline", "underline",
     "widehat", "widetilde", "mathbb", "mathbf", "mathcal", "mathrm",
@@ -134,7 +145,7 @@ _KNOWN_MATH_CMDS = frozenset({
     # 分式/根号
     "frac", "sqrt", "binom", "dfrac", "tfrac",
     # 左右括号
-    "left", "right",
+    "left", "right", "bigl", "bigr", "Bigl", "Bigr", "big", "Big",
     # 常用函数名
     "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp",
     "sinh", "cosh", "tanh", "det", "gcd", "deg", "dim", "ker",
@@ -216,14 +227,17 @@ _BACKTICK_RE = re.compile(r"`([^`\n]+?)`")
 # unicode 数学字符（_UNICODE_MATH_MAP 的 key），用于 _NAKED_SUB_RE 的 ident 起头集
 _UNICODE_MATH_CHARS = "".join(_UNICODE_MATH_MAP.keys())
 # 裸 LaTeX 下标/上标：[字母 or unicode 数学符][后续字母数字]*([_^](identifier|{...}))+
-# 例：D_i / c_{ij} / λ_i^net / γ_{ij}
+# 允许 _^ 交替（如 S_i^{(1)} / λ_i^net），但不匹配连续同向（如 a_b_c → double subscript）
+# 例：D_i / c_{ij} / λ_i^net / γ_{ij} / S_i^{(1)}
 # 排除：
 #   (?<![\\$\w]) 前面不是 \（命令名）/ $（math 内）/ 单词字符（避免中段切）
 #   (?![\w.]) 后面不是单词字符或点：防止 v8 实测的 'sensitivity_capacity.png' 误判
 _NAKED_SUB_RE = re.compile(
     r"(?<![\\$\w])"
     r"([A-Za-z" + re.escape(_UNICODE_MATH_CHARS) + r"][A-Za-z0-9]*"
-    r"(?:[_^](?:\{[^}]+\}|[A-Za-z0-9]+))+)"
+    r"(?:_(?:\{[^}]+\}|[A-Za-z0-9]+))"  # 一个 _ 段
+    r"(?:\^(?:\{[^}]+\}|[A-Za-z0-9]+))?"  # 可选一个 ^ 段
+    r")"
     r"(?![\w./])"
 )
 
@@ -411,14 +425,18 @@ def _md_table_to_latex(s: str) -> str:
 
 
 def _escape_remaining_underscores(s: str) -> str:
-    r"""对 $...$ 之外、equation 块之外残留的 `_` 做 escape。
+    r"""对 $...$ 之外、equation 块之外的 text-mode 特殊字符做转义。
 
     chain 末尾用：前面几步包了真数学（`D_i` → `$D_i$` 或 \begin{equation}...），
-    剩下的 `_` 必然出现在文件名 (`sensitivity_capacity.png`) / 路径 / 中文中间，
-    这些都属于 text mode，裸用会让 LaTeX 进 math mode 触发 'Missing $ inserted'。
+    剩下的特殊字符必然出现在文本段，裸用会让 LaTeX 报错：
+    - `_` → Missing $ inserted（text mode 进 math）
+    - `&` → Misplaced alignment tab
+    - `#` → macro parameter character
+    - `%` → 注释掉后续内容（最危险——`\textbf{56.7%}` 会吞掉整个段落）
 
     跳过 \command 后紧跟的 `_`（保留 `\paragraph{w\_RF}` 已 escape 形式）。
     跳过 \begin{equation}...\end{equation} 块内（公式里的 _ 是合法 math 语法）。
+    跳过已转义的 `\%` `\&` `\#`（`(?<!\\)` 负向断言）。
     """
     if not s:
         return s
@@ -426,11 +444,14 @@ def _escape_remaining_underscores(s: str) -> str:
     parts = re.split(r"(\\begin\{equation\*?\}.*?\\end\{equation\*?\})", s, flags=re.DOTALL)
     for i in range(len(parts)):
         if parts[i].startswith(r"\begin{equation"):
-            continue  # 公式块内 _ 不动
-        # 块外按 $ 再切
+            continue  # 公式块内不动
+        # 块外按 $ 再切，偶数段 = text mode
         segs = parts[i].split("$")
         for j in range(0, len(segs), 2):
             segs[j] = re.sub(r"(?<!\\)_", r"\_", segs[j])
+            segs[j] = re.sub(r"(?<!\\)%", r"\%", segs[j])
+            segs[j] = re.sub(r"(?<!\\)&", r"\&", segs[j])
+            segs[j] = re.sub(r"(?<!\\)#", r"\#", segs[j])
         parts[i] = "$".join(segs)
     return "".join(parts)
 
@@ -506,7 +527,7 @@ def _prepare_section(s: str) -> str:
     5. markdown 反引号 `` `S_i` `` → `$S_i$`（内容里 unicode 同步展开）
     6. 裸 LaTeX 下标 `D_i` → `$D_i$`（writer 漏的兜底）
     7. unicode 数学符号 α → `$\\alpha$`（在 $...$ 之外的）
-    8. 残留的裸 `_` → `\\_`（文件名/路径里的 `_` 必须 escape，否则 text mode 进 math）
+    8. 残留的 text-mode 特殊字符 `_` `%` `&` `#` → 转义（文件名/百分比/特殊符）
 
     **不调 _latex_escape**——writer 在 paper 段会故意写 LaTeX inline math。
     """
