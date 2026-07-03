@@ -214,11 +214,14 @@ def complete(
         content = raw.choices[0].message.content or ""
         if schema is None:
             return content
-        # LLM 在 JSON 字符串里输出 LaTeX 命令 \beta/\big/\bf 时，\b 是合法 JSON
-        # 转义（backspace），json.loads 把 "\beta" 解析成 0x08+eta，丢了反斜杠。
-        # 修复：在 raw JSON 里把 \b+字母 的反斜杠双写为 \\b+字母，让 json.loads
-        # 保留字面反斜杠。\b 不跟字母时（真正的 backspace 意图）不动。
-        content = content.replace("\\b", "\\\\b")
+        # LLM 在 JSON 字符串里输出 LaTeX 命令 \beta/\big/\tau/\text/\top 时，
+        # \b \t \f 都是合法 JSON 转义（backspace/tab/formfeed），json.loads 会
+        # 把 "\beta" 解析成 0x08+eta，"\tau" 解析成 tab+au，丢了反斜杠。
+        # 修复：在 raw JSON 里把 \b \t \f 的反斜杠双写，让 json.loads 保留字面反斜杠。
+        # 注意：必须用 raw string r"\t" 匹配字面 backslash+t，普通 "\\t" 是 TAB 字符。
+        # ponytail: \n 不动——\newcommand 罕见且 \n 确实是换行意图居多
+        for esc in (r"\b", r"\t", r"\f"):
+            content = content.replace(esc, r"\\" + esc[1:])
         try:
             return schema.model_validate_json(content)
         except (ValidationError, json.JSONDecodeError) as e:
