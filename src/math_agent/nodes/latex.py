@@ -544,6 +544,31 @@ def _truncate_caption(s: str, *, max_chars: int = 55) -> str:
     return s[:max_chars]
 
 
+def _curate_code(code: str, max_lines: int = 80) -> str:
+    """截取代码前 max_lines 行（ponytail: 一行 Python，不注册 Jinja2 过滤器）。"""
+    lines = code.split("\n")
+    if len(lines) <= max_lines:
+        return code
+    return "\n".join(lines[:max_lines]) + f"\n# ... (共 {len(lines)} 行，截取前 {max_lines} 行)"
+
+
+def _curate_stdout(stdout: str) -> str:
+    """提取 stdout 关键行：RESULT: 行 + 末尾 5 行。"""
+    if not stdout:
+        return ""
+    lines = stdout.splitlines()
+    result_lines = [l for l in lines if l.strip().startswith("RESULT:")]
+    tail = lines[-5:]
+    # 去重保序
+    seen = set()
+    out = []
+    for l in result_lines + tail:
+        if l not in seen:
+            seen.add(l)
+            out.append(l)
+    return "\n".join(out)
+
+
 def latex_node(state: MathModelingState) -> dict:
     workdir = Path(state.output_dir or ".")
     workdir.mkdir(parents=True, exist_ok=True)
@@ -589,6 +614,15 @@ def latex_node(state: MathModelingState) -> dict:
     render_kwargs = dict(
         problem=_latex_escape(_wrap_unicode_math(title_line)),
         paper=safe_paper, figures=safe_figures, sensitivity_runs=safe_sens,
+        code_artifacts=[
+            {
+                "purpose": a.purpose, "code": a.code, "stdout": a.stdout,
+                "success": a.success, "artifact_paths": a.artifact_paths,
+                "curated_code": _curate_code(a.code),
+                "curated_stdout": _curate_stdout(a.stdout),
+            }
+            for a in state.code_artifacts if a.success
+        ],
     )
     if use_gmcm:
         # 队员逗号拆分到 a/b/c，空位补占位
@@ -601,7 +635,6 @@ def latex_node(state: MathModelingState) -> dict:
             member_b=mem[1] or None,
             member_c=mem[2] or None,
             keywords=(state.paper.keywords or "数学建模").strip(),
-            code_artifacts=[a for a in state.code_artifacts if a.success],
         )
         # cls 必须和 .tex 在同一目录才能被 xelatex 找到；封面图也要带上
         cls_src = _TEMPLATE_DIR / "gmcmthesis.cls"

@@ -106,11 +106,21 @@ _env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=select_aut
 
 
 def render_markdown(state: MathModelingState) -> str:
+    from math_agent.nodes.latex import _curate_code, _curate_stdout
     tmpl = _env.get_template("paper.md.j2")
+    curated = [
+        {
+            "purpose": a.purpose, "code": a.code, "stdout": a.stdout,
+            "success": a.success, "artifact_paths": a.artifact_paths,
+            "curated_code": _curate_code(a.code),
+            "curated_stdout": _curate_stdout(a.stdout),
+        }
+        for a in state.code_artifacts if a.success
+    ]
     return tmpl.render(
         problem=state.problem,
         paper=state.paper,
-        code_artifacts=state.code_artifacts,
+        code_artifacts=curated,
         figures=state.figures,
         sensitivity_runs=state.sensitivity_runs,
     )
