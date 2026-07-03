@@ -69,3 +69,43 @@ def test_runner_result_error_kind_empty_on_success(workdir):
     res = run_python("print('hi')", workdir=workdir)
     assert res.success
     assert res.error_kind == ""
+
+
+def test_extract_numeric_results_baseline_format():
+    """RESULT: baseline=X metric1=Y metric2=Z 格式。"""
+    from math_agent.tools.runner import extract_numeric_results
+    stdout = (
+        "一些输出...\n"
+        "RESULT: baseline=no_schedule total_cost=1245.3 service_rate=0.82\n"
+        "更多输出\n"
+        "RESULT: baseline=greedy total_cost=980.0 service_rate=0.91 solve_time=12.5\n"
+    )
+    results = extract_numeric_results(stdout)
+    assert "no_schedule" in results
+    assert results["no_schedule"]["total_cost"] == 1245.3
+    assert results["no_schedule"]["service_rate"] == 0.82
+    assert results["greedy"]["solve_time"] == 12.5
+
+
+def test_extract_numeric_results_scenario_format():
+    """RESULT: scenario=X metric=Y 格式也支持。"""
+    from math_agent.tools.runner import extract_numeric_results
+    stdout = "RESULT: scenario=high_demand objective=9876.5\n"
+    results = extract_numeric_results(stdout)
+    assert "high_demand" in results
+    assert results["high_demand"]["objective"] == 9876.5
+
+
+def test_extract_numeric_results_no_result_lines():
+    """没有 RESULT 行返回空 dict。"""
+    from math_agent.tools.runner import extract_numeric_results
+    assert extract_numeric_results("普通输出\n没有结果行") == {}
+    assert extract_numeric_results("") == {}
+
+
+def test_extract_numeric_results_ignores_malformed():
+    """RESULT 行缺 key=value 对时跳过。"""
+    from math_agent.tools.runner import extract_numeric_results
+    stdout = "RESULT: baseline=test\n"  # 没有 metric=value
+    results = extract_numeric_results(stdout)
+    assert results == {} or results.get("test") == {}

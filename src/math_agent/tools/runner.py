@@ -76,3 +76,31 @@ def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
         artifact_paths=[str(workdir / n) for n in new_files],
         error_kind="" if proc.returncode == 0 else "runtime",
     )
+
+
+import re as _re
+
+_RESULT_LINE_RE = _re.compile(
+    r"^RESULT:\s*(?:baseline|scenario|method|config)=(\S+)\s+(.+)$",
+    _re.MULTILINE,
+)
+_RESULT_PAIR_RE = _re.compile(r"(\w+)=(-?\d+\.?\d*(?:[eE][+-]?\d+)?)")
+
+
+def extract_numeric_results(stdout: str) -> dict[str, dict[str, float]]:
+    """从 stdout 提取所有 RESULT: 行，返回 {identifier: {metric: value}} 映射。
+
+    支持格式（与 sensitivity.py 的 RESULT: parameter=... 互补，不冲突）：
+      RESULT: baseline=no_schedule total_cost=1245.3 service_rate=0.82
+      RESULT: scenario=high_demand objective=9876 solve_time=12.5
+    """
+    results: dict[str, dict[str, float]] = {}
+    for m in _RESULT_LINE_RE.finditer(stdout):
+        identifier = m.group(1)
+        pairs_str = m.group(2)
+        metrics: dict[str, float] = {}
+        for pm in _RESULT_PAIR_RE.finditer(pairs_str):
+            metrics[pm.group(1)] = float(pm.group(2))
+        if metrics:
+            results[identifier] = metrics
+    return results
