@@ -212,3 +212,20 @@ def test_table_assembler_node_handles_empty_state():
     assert "paper" in result
     assert "table_warnings" in result
 
+
+def test_references_section_not_cleaned():
+    """references 含真实英文文献标题，不应被禁用词清洗破坏。"""
+    from math_agent.nodes.table_assembler import _SECTION_FIELDS
+    assert "references" not in _SECTION_FIELDS
+
+    # 直接测试：含 Evidence/Issue 的参考文献文本应原样保留
+    from math_agent.nodes.table_assembler import table_assembler_node
+    from math_agent.state import MathModelingState, PaperSections
+    s = MathModelingState(problem="test")
+    s.paper = PaperSections(
+        references="[1] Smith J. Evidence-Based Optimization. Journal of Math, Issue 12, 2023."
+    )
+    result = table_assembler_node(s)
+    assert "Evidence" in result["paper"].references
+    assert "Issue" in result["paper"].references
+

@@ -43,9 +43,7 @@ def _clean_forbidden_words(text: str, section: str) -> tuple[str, list[str]]:
     return text, warnings
 
 
-import re as _re  # 已有 import re，但 _UNIT_RE 需要独立引用
-
-_UNIT_RE = _re.compile(r"^(.*?)\s*[（(]([^()（）]+)[)）]\s*$")
+_UNIT_RE = re.compile(r"^(.*?)\s*[（(]([^()（）]+)[)）]\s*$")
 
 
 def _generate_variable_table(variables: dict[str, str]) -> str:
@@ -114,10 +112,14 @@ def _inject_table(section_text: str, title: str, table_md: str) -> str:
 from math_agent.state import MathModelingState, PaperSections
 
 
-# 要清洗的 section 字段名
+# 要清洗的 section 字段名。
+# 注意：references 不在此列表中——参考文献含真实英文文献标题/期刊名，
+# 其中 Evidence/Issue/Claim/Reasoning 等是合法英文单词，清洗会破坏引用。
+# 禁用词是内部流程产物（PaperCritic、CER 框架术语泄漏到中文正文），
+# 不会出现在格式规范的参考文献条目中。
 _SECTION_FIELDS = [
     "abstract", "problem_restatement", "assumptions", "notation",
-    "model_section", "solution", "sensitivity", "conclusion", "references",
+    "model_section", "solution", "sensitivity", "conclusion",
 ]
 
 
