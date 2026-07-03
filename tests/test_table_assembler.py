@@ -65,7 +65,7 @@ def test_variable_table_basic():
     table = _generate_variable_table(variables)
     assert "| 符号 | 含义 | 单位 |" in table
     assert "|---|---|---|" in table
-    assert "x_i" in table
+    assert "x\_i" in table  # 下划线被 LaTeX 转义
     assert "决策变量，第i个时段的调度量" in table
     assert "件" in table          # 从 "需求量(件)" 拆出单位
     assert "—" in table           # alpha 无单位 → 填 —
@@ -183,7 +183,7 @@ def test_table_assembler_node_injects_variable_table():
     result = table_assembler_node(s)
     new_paper = result["paper"]
     assert "| 符号 | 含义 | 单位 |" in new_paper.notation
-    assert "x_i" in new_paper.notation
+    assert "x\_i" in new_paper.notation  # 下划线被 LaTeX 转义
 
 
 def test_table_assembler_node_injects_sensitivity_table():

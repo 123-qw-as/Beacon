@@ -48,11 +48,32 @@ def _clean_forbidden_words(text: str, section: str) -> tuple[str, list[str]]:
 _UNIT_RE = re.compile(r"^(.*?)\s*[（(]([^()（）]+)[)）]\s*$")
 
 
+def _sanitize_table_cell(text: str) -> str:
+    """转义表格 cell 里的 LaTeX 危险字符，让它们当纯文本渲染。
+
+    变量名里可能有 \\mathbf{h}、$F_{i,t}$ 等——在 tabularx 里裸用会崩编译。
+    ponytail: 转义 \\ $ & % # _ { }，保留中文和普通字符。
+    """
+    if not text:
+        return text
+    # 先把已有的 $...$ 数学环境内容保留（把 $ 之间的内容整体转义内部特殊符）
+    # ponytail: 太复杂，直接全转义——变量表里不需要渲染数学公式，纯文本够了
+    return (text.replace("\\", r"\textbackslash{}")
+            .replace("$", r"\$")
+            .replace("&", r"\&")
+            .replace("%", r"\%")
+            .replace("#", r"\#")
+            .replace("_", r"\_")
+            .replace("{", r"\{")
+            .replace("}", r"\}"))
+
+
 def _generate_variable_table(variables: dict[str, str]) -> str:
     """从 model_versions[-1].variables 生成符号说明 markdown 表。
 
     description 含括号单位则拆分（"需求量(件)" → 含义"需求量" / 单位"件"）。
     返回空字符串如果 variables 为空。
+    cell 内容做 LaTeX 转义，避免变量名里的 \\mathbf{} $F_{i,t}$ 崩 tabularx。
     """
     if not variables:
         return ""
@@ -63,7 +84,7 @@ def _generate_variable_table(variables: dict[str, str]) -> str:
             meaning, unit = m.group(1).strip(), m.group(2).strip()
         else:
             meaning, unit = desc.strip(), "—"
-        lines.append(f"| {name} | {meaning} | {unit} |")
+        lines.append(f"| {_sanitize_table_cell(name)} | {_sanitize_table_cell(meaning)} | {_sanitize_table_cell(unit)} |")
     return "\n".join(lines)
 
 
