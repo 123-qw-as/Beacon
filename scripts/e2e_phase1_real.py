@@ -104,12 +104,20 @@ def verify(final_state: dict, out_dir: Path) -> list[str]:
         paper.references or "",
     ])
 
-    # ---- 检查 1: table_warnings 非空（证明 table_assembler 节点跑了）----
-    warnings = final_state.get("table_warnings", [])
-    if not warnings:
-        failures.append("检查1 FAIL: table_warnings 为空——table_assembler 可能没执行或没清洗到任何词")
+    # ---- 检查 1: table_assembler 节点执行了 ----
+    # table_warnings 为空是正常的——说明 writer 没泄露禁用词（RULE 7 生效）
+    # 验证 table_assembler 跑了的方式：notation 含变量表 或 solution 含对比表
+    has_var_table = "| 符号 | 含义 | 单位 |" in (paper.notation or "")
+    has_comp_table = "| 方案 |" in (paper.solution or "")
+    if has_var_table or has_comp_table:
+        print(f"  ✓ 检查1: table_assembler 已执行（变量表={has_var_table}, 对比表={has_comp_table}）")
     else:
-        print(f"  ✓ 检查1: table_warnings 有 {len(warnings)} 条（table_assembler 已执行）")
+        failures.append("检查1 FAIL: notation 无变量表且 solution 无对比表——table_assembler 可能没执行")
+    warnings = final_state.get("table_warnings", [])
+    if warnings:
+        print(f"     table_warnings: {len(warnings)} 条（禁用词被清洗）")
+    else:
+        print(f"     table_warnings: 空（writer 未泄露禁用词，RULE 7 生效）")
 
     # ---- 检查 2: 变量表注入到 notation ----
     if "| 符号 | 含义 | 单位 |" in (paper.notation or ""):
