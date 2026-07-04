@@ -258,10 +258,10 @@ _UNICODE_MATH_CHARS = "".join(_UNICODE_MATH_MAP.keys())
 # 允许 _^ 交替（如 S_i^{(1)} / λ_i^net），但不匹配连续同向（如 a_b_c → double subscript）
 # 例：D_i / c_{ij} / λ_i^net / γ_{ij} / S_i^{(1)}
 # 排除：
-#   (?<![\\$\w]) 前面不是 \（命令名）/ $（math 内）/ 单词字符（避免中段切）
+#   (?<![\\$\w{]) 前面不是 \（命令名）/ $（math 内）/ 单词字符 / {（命令参数内，如 \paragraph{w_RF}）
 #   (?![\w.]) 后面不是单词字符或点：防止 v8 实测的 'sensitivity_capacity.png' 误判
 _NAKED_SUB_RE = re.compile(
-    r"(?<![\\$\w])"
+    r"(?<![\\$\w{])"
     r"([A-Za-z" + re.escape(_UNICODE_MATH_CHARS) + r"][A-Za-z0-9]*"
     r"(?:_(?:\{[^}]+\}|[A-Za-z0-9]+))"  # 一个 _ 段
     r"(?:\^(?:\{[^}]+\}|[A-Za-z0-9]+))?"  # 可选一个 ^ 段

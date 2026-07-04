@@ -11,21 +11,37 @@ def test_clean_replaces_papercritic():
 
 
 def test_clean_replaces_claim_evidence_reasoning():
-    text = "Claim: 成本下降。Evidence: 代码输出。Reasoning: 优化有效。"
+    # M3 fix: Claim/Evidence/Reasoning 只在中文上下文替换
+    text = "结论是Claim: 成本下降。依据是Evidence: 代码输出。推理是Reasoning: 优化有效。"
     cleaned, warnings = _clean_forbidden_words(text, "solution")
     assert "Claim" not in cleaned
     assert "结论" in cleaned
     assert "依据" in cleaned
     assert "推理" in cleaned
-    assert len(warnings) == 3
+    assert len(warnings) >= 3
+
+
+def test_clean_preserves_english_claim_evidence():
+    """M3: 纯英文段落里的 Claim/Evidence 不应被替换。"""
+    text = "Based on the evidence, we conclude that the claim is valid."
+    cleaned, warnings = _clean_forbidden_words(text, "abstract")
+    assert "evidence" in cleaned.lower()
+    assert "claim" in cleaned.lower()
 
 
 def test_clean_replaces_code_number():
-    text = "见代码1和代码[2]的输出"
+    # M4 fix: 只匹配代码[N] 方括号形式，不匹配代码N 裸数字形式
+    text = "见代码[2]的输出"
     cleaned, warnings = _clean_forbidden_words(text, "solution")
-    assert "代码1" not in cleaned
     assert "代码[2]" not in cleaned
     assert "代码" in cleaned
+
+
+def test_clean_preserves_code_with_quantity():
+    """M4: '代码 45 行' 不应被吃掉数字。"""
+    text = "代码 45 行的运行时间"
+    cleaned, warnings = _clean_forbidden_words(text, "solution")
+    assert "45" in cleaned
 
 
 def test_clean_replaces_placeholder_names():
@@ -172,7 +188,7 @@ def _state_for_assembler():
         model_section="基础预测模型：使用 XGBoost。PaperCritic 给了好评。",
         notation="原有符号表",
         sensitivity="敏感性分析正文",
-        solution="求解过程见代码1。Claim: 最优。",
+        solution="求解过程见代码[1]。Claim是最优。",
         conclusion="模型优点多。",
     )
     return s

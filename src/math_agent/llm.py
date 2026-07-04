@@ -28,16 +28,10 @@ litellm.suppress_debug_info = True
 litellm.set_verbose = False
 import os
 os.environ.setdefault("LITELLM_LOG", "CRITICAL")
-# 强制本地 LLM 调用不走系统 HTTP 代理（Windows clash/v2ray 常设系统代理，
+# 强制本地 LLM 调用不走系统代理（Windows clash/v2ray 常设系统代理，
 # httpx 会读系统代理设置把 localhost:20128 的请求也走代理转发，导致
-# 代理转发本地请求时 socket read 永久阻塞。NO_PROXY 让 localhost 直连。）
-os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
-os.environ.setdefault("no_proxy", "localhost,127.0.0.1")
-# 强制本地请求不走系统代理：Windows 用户常开 clash/v2ray 系统代理（7892 等），
-# litellm/httpx 会读 Windows 注册表 ProxyServer 把 localhost:20128 的请求也走
-# 代理转发，代理转发本地请求时 socket read 永久阻塞 → Thread.join 每次等满
-# 180s 才超时 → tenacity 5 次重试 = 15min 看起来像僵死。设 NO_PROXY 让本地
-# LLM router / ollama 直连。用 setdefault 不覆盖用户显式设的值。
+# 代理转发本地请求时 socket read 永久阻塞。NO_PROXY 让 localhost 直连。
+# 用 setdefault 不覆盖用户显式设的值。）
 os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
 os.environ.setdefault("no_proxy", "localhost,127.0.0.1")
 

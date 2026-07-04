@@ -31,7 +31,7 @@ def evaluation_node(state: MathModelingState) -> dict:
 
     paper_critic = state.latest_critic("paper")
     out: EvaluationReport = complete(
-        build_prompt(p, state.figures, state.sensitivity_runs, paper_critic),
+        build_prompt(p, state.figures, state.sensitivity_runs, paper_critic, state.table_warnings),
         schema=EvaluationReport, system=SYSTEM,
         model=MODEL_ROUTING["evaluation"],
     )

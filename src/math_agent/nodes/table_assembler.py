@@ -12,14 +12,25 @@ from math_agent.tools.runner import extract_numeric_results
 
 # 禁用词 → 替换词。顺序敏感：先替换单数 issue 再处理其他。
 # ponytail: 用 list 而非 dict，因为同一模式可能需要不同替换上下文。
+# Claim/Evidence/Reasoning/issue 只在中文上下文中替换（前后有中文字符），
+# 避免破坏纯英文段落（如 abstract 里的英文引用句）。
+# 注意：(?i) 不能在 lookbehind 内，用 re.IGNORECASE flag 代替。
+_CJK = r"\u4e00-\u9fff"
 _FORBIDDEN_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"(?i)papercritic"), "[内部评审]"),
-    (re.compile(r"(?i)\bclaim\b"), "结论"),
-    (re.compile(r"(?i)\bevidence\b"), "依据"),
-    (re.compile(r"(?i)\breasoning\b"), "推理"),
+    (re.compile(r"papercritic", re.IGNORECASE), "[内部评审]"),
+    # Claim/Evidence/Reasoning：前面或后面有中文字符才替换（CER 框架泄露场景）
+    # 注意：CJK 和 ASCII 之间无 \b（Python \w 含 unicode），用 lookaround CJK 代替
+    (re.compile(rf"(?<=[{_CJK}])claim", re.IGNORECASE), "结论"),
+    (re.compile(rf"claim(?=[{_CJK}])", re.IGNORECASE), "结论"),
+    (re.compile(rf"(?<=[{_CJK}])evidence", re.IGNORECASE), "依据"),
+    (re.compile(rf"evidence(?=[{_CJK}])", re.IGNORECASE), "依据"),
+    (re.compile(rf"(?<=[{_CJK}])reasoning", re.IGNORECASE), "推理"),
+    (re.compile(rf"reasoning(?=[{_CJK}])", re.IGNORECASE), "推理"),
+    # 代码[数字] → 代码（只匹配方括号形式，不误吃"代码 45 行"）
     (re.compile(r"代码\s*\[\s*\d+\s*\]"), "代码"),
-    (re.compile(r"代码\s*\d+"), "代码"),
-    (re.compile(r"(?i)\bissue\b(?!s)"), "问题"),       # 单数 issue，保留复数 issues
+    # issue 单数只在中文上下文替换
+    (re.compile(rf"(?<=[{_CJK}])issue(?!s)", re.IGNORECASE), "问题"),
+    (re.compile(rf"issue(?=[{_CJK}])", re.IGNORECASE), "问题"),
     (re.compile(r"回应\s*[:：]"), "处理:"),
     (re.compile(r"回应"), "处理"),
     (re.compile(r"超时"), "运行"),
@@ -133,6 +144,7 @@ def _generate_comparison_table(artifacts: list) -> str:
     """从 code_artifacts 中提取 baseline 对照结果生成对比表。
 
     主方案（category='figure'）的 stdout 如果也含 RESULT: baseline=ours 也纳入。
+    注意：指标列顺序取决于 artifact 顺序——若各方案输出不同指标，缺失列填 —。
     无 baseline artifacts 或无 RESULT 行时返回空字符串。
     """
     rows: list[dict[str, str]] = []
