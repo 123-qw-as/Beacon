@@ -75,3 +75,12 @@ def test_coder_node_produces_baseline_artifacts(monkeypatch):
     assert "baseline:no_schedule" in categories
     assert "baseline:simple_pred" in categories
     assert "baseline:greedy" in categories
+
+
+def test_main_figure_prompt_includes_ours_result_contract():
+    """I1 回归：主方案 prompt 必须要求输出 RESULT: baseline=ours，否则对比表缺本文方案行。"""
+    from math_agent.prompts.coder_figure_one import build_prompt_figure_one
+    from math_agent.state import ModelVersion
+    m = ModelVersion(stage="final", description="test", variables={"x": "v"})
+    prompt = build_prompt_figure_one(m, "plot1")
+    assert "RESULT: baseline=ours" in prompt

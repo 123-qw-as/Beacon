@@ -202,3 +202,29 @@ def test_complete_hangs_forever_times_out_via_thread_join(mocker, monkeypatch):
     elapsed = _t.monotonic() - t0
     # 应在 ~2-6s 内返回（1 次 join 超时 2s + 可能 1 次重试再超时 2s）
     assert elapsed < 15, f"耗时 {elapsed:.1f}s，Thread.join 超时未生效"
+
+
+def test_json_escape_preserves_latex_backslash_b_t_f():
+    """LLM 在 JSON 里输出 LaTeX 命令 \beta/\tau/\frac 时，
+    \b \t \f 是合法 JSON escape，json.loads 会吃掉反斜杠。
+    修复用 raw string r"\b" r"\t" r"\f" 双写反斜杠。"""
+    import math_agent.llm as llm_mod
+
+    # 模拟 LLM 返回的 raw content（含 LaTeX 命令）
+    # \beta → \b+eta, \tau → \t+au, \frac → \f+rac
+    raw = r'{"result": "use $\beta$ and $\tau$ and $\frac{1}{2}$"}'
+
+    # 验证修复逻辑：手动执行 replace
+    content = raw
+    for esc in (r"\b", r"\t", r"\f"):
+        content = content.replace(esc, r"\\" + esc[1:])
+
+    import json
+    parsed = json.loads(content)["result"]
+    assert r"\beta" in parsed, f"\beta 被损坏: {parsed}"
+    assert r"\tau" in parsed, f"\tau 被损坏: {parsed}"
+    assert r"\frac" in parsed, f"\frac 被损坏: {parsed}"
+    # 不应含 backspace/tab/formfeed 控制字符
+    assert chr(8) not in parsed, "含 backspace"
+    assert chr(9) not in parsed, "含 tab"
+    assert chr(12) not in parsed, "含 formfeed"

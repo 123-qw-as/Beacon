@@ -64,33 +64,55 @@ _UNICODE_MATH_MAP = {
 def _wrap_unicode_math(s: str) -> str:
     """把字符串中孤立的 unicode 数学字符替换为 `$\\cmd$`。
 
-    跳过已在 `$...$` 内的部分。如果 unicode 后面紧跟 `_xxx` 或 `^xxx`
-    （下标/上标 token），把整体作为一个 inline math 包起来——避免
-    `α_i` 被切成 `$\\alpha$_i` 导致 `_i` 又进 text mode 触发错误。
+    跳过已在 `$...$` 内的部分。连续相邻的 unicode 数学字符（如 `σ²`）会
+    合并到同一个 inline math span（`$\\sigma^2$`），避免 `$\\sigma$$^2$`
+    两个独立 span 导致排版断开。
     """
     if not s:
         return s
     parts = s.split("$")
     sub_re = re.compile(r"([_^](?:\{[^}]+\}|[A-Za-z0-9]+))+")
+
     for i in range(0, len(parts), 2):
-        out = []
-        j = 0
         seg = parts[i]
+        out: list[str] = []
+        j = 0
         while j < len(seg):
             ch = seg[j]
-            cmd = _UNICODE_MATH_MAP.get(ch)
-            if cmd is None:
+            if ch not in _UNICODE_MATH_MAP:
                 out.append(ch)
                 j += 1
                 continue
-            # 看后面是否紧跟下标/上标（re.match(pos) 仍从字符串绝对开头匹配 ^，所以去掉 ^ 并 anchor 在 pos）
-            m = sub_re.match(seg, j + 1)
-            if m and m.start() == j + 1:
-                out.append(f"${cmd}{m.group(0)}$")
-                j = m.end()
-            else:
-                out.append(f"${cmd}$")
-                j += 1
+            # 收集连续 unicode 数学符 run
+            run_end = j
+            while run_end < len(seg) and seg[run_end] in _UNICODE_MATH_MAP:
+                run_end += 1
+                # 吃可选的 _xxx / ^xxx 后缀
+                while run_end < len(seg) and seg[run_end] in ("_", "^"):
+                    sm = sub_re.match(seg, run_end)
+                    if sm and sm.start() == run_end:
+                        run_end = sm.end()
+                    else:
+                        run_end += 1
+            # 转换 run[j:run_end]
+            token = seg[j:run_end]
+            converted: list[str] = []
+            pos = 0
+            while pos < len(token):
+                c = token[pos]
+                cmd = _UNICODE_MATH_MAP.get(c)
+                if cmd is not None:
+                    converted.append(cmd)
+                    pos += 1
+                    sm = sub_re.match(token, pos)
+                    if sm and sm.start() == pos:
+                        converted.append(sm.group(0))
+                        pos = sm.end()
+                else:
+                    converted.append(c)
+                    pos += 1
+            out.append("$" + "".join(converted) + "$")
+            j = run_end
         parts[i] = "".join(out)
     return "$".join(parts)
 
@@ -184,11 +206,17 @@ def _pad_math_commands(s: str) -> str:
         rest = word[len(prefix):]
         return f"\\{prefix}\\,{rest}"
 
-    # 先按 equation 块切；块内直接处理，块外再按 $ 切处理 inline math span
-    eq_re = re.compile(r"(\\begin\{equation\*?\}.*?\\end\{equation\*?\})", re.DOTALL)
-    outer = eq_re.split(s)
+    # 先按 display/inline math 块切；块内直接处理，块外再按 $ 切处理 inline math span
+    # 需要处理：\[...\]、\(...\)、\begin{equation}...\end{equation}
+    math_re = re.compile(
+        r"(\\\[.*?\\\]|\\\(.*?\\\)|\\begin\{equation\*?\}.*?\\end\{equation\*?\})",
+        re.DOTALL,
+    )
+    outer = math_re.split(s)
     for k in range(len(outer)):
-        if outer[k].startswith(r"\begin{equation"):
+        # 属于 math 块（奇数索引）
+        is_block = outer[k].startswith(r"\[") or outer[k].startswith(r"\(") or outer[k].startswith(r"\begin{equation")
+        if is_block:
             outer[k] = _MATH_CMD_WORD_RE.sub(_sub, outer[k])
         else:
             parts = outer[k].split("$")
@@ -375,10 +403,10 @@ def _md_table_to_latex(s: str) -> str:
     align 环境的列对齐符）不动。
     """
     def _escape_cell_amps(cell: str) -> str:
-        """转义 cell 里的裸 &，但跳过 $...$ math 模内的。"""
+        """转义 cell 里的裸 &，但跳过 $...$ math 模内的和已转义的 \&。"""
         parts = cell.split("$")
         for i in range(0, len(parts), 2):   # 偶数段 = text，奇数段 = math
-            parts[i] = parts[i].replace("&", r"\&")
+            parts[i] = re.sub(r"(?<!\\)&", r"\&", parts[i])
         return "$".join(parts)
 
     if not s or "|" not in s:
@@ -396,9 +424,21 @@ def _md_table_to_latex(s: str) -> str:
                 header_cells = [c.strip() for c in line.strip().strip("|").split("|")]
                 header_cells = [_escape_cell_amps(c) for c in header_cells]
                 ncols = len(header_cells)
-                # tabularx 自适应列宽 + booktabs 三线表（gmcmthesis 已 RequirePackage 二者）
-                # 三线表惯例：\toprule（顶）/ \midrule（表头下）/ \bottomrule（底），中间无横线
-                col_spec = "X" * ncols  # tabularx X 列等分 \linewidth；三线表不画竖线
+                # 从分隔行解析对齐方式：:--- = 左, :---: = 中, ---: = 右, --- = 左（默认）
+                sep_cells = [c.strip() for c in sep.strip().strip("|").split("|")]
+                # 检查分隔行是否有对齐标记 `:`。没有 `:` 时保持原有 X（等宽自适应列）
+                has_align_colons = any(":" in sc for sc in sep_cells)
+                if has_align_colons:
+                    col_spec = "".join(
+                        "c" if sc.startswith(":") and sc.endswith(":") else
+                        "r" if sc.endswith(":") else
+                        "l" if sc.startswith(":") else "l"
+                        for sc in sep_cells
+                    )
+                else:
+                    col_spec = "X" * ncols
+                # 补齐/截断到 ncols
+                col_spec = (col_spec + "X" * ncols)[:ncols]
                 tbl = [r"\begin{tabularx}{\linewidth}{" + col_spec + r"}",
                        r"\toprule",
                        " & ".join(header_cells) + r" \\",
@@ -425,35 +465,87 @@ def _md_table_to_latex(s: str) -> str:
 
 
 def _escape_remaining_underscores(s: str) -> str:
-    r"""对 $...$ 之外、equation 块之外的 text-mode 特殊字符做转义。
+    r"""对 $...$ 之外、math/tabularx 环境之外的 text-mode 特殊字符做转义。
 
     chain 末尾用：前面几步包了真数学（`D_i` → `$D_i$` 或 \begin{equation}...），
     剩下的特殊字符必然出现在文本段，裸用会让 LaTeX 报错：
     - `_` → Missing $ inserted（text mode 进 math）
     - `&` → Misplaced alignment tab
     - `#` → macro parameter character
-    - `%` → 注释掉后续内容（最危险——`\textbf{56.7%}` 会吞掉整个段落）
+    - `%` → 注释掉后续内容——`\textbf{56.7%}` 会吞掉整个段落
 
-    跳过 \command 后紧跟的 `_`（保留 `\paragraph{w\_RF}` 已 escape 形式）。
-    跳过 \begin{equation}...\end{equation} 块内（公式里的 _ 是合法 math 语法）。
-    跳过已转义的 `\%` `\&` `\#`（`(?<!\\)` 负向断言）。
+    保护以下环境，内部特殊字符按语境处理：
+    - math 环境（equation, align, gather, ……，含 \[ \] 和 \( \)）：_ & 都是合法语法，不动
+    - tabularx 环境：& 是列分隔符保留；_ % # 仍需转义（text mode）
     """
     if not s:
         return s
-    # 先按 equation 块切分，块内不动；块外再按 $ 切分
-    parts = re.split(r"(\\begin\{equation\*?\}.*?\\end\{equation\*?\})", s, flags=re.DOTALL)
-    for i in range(len(parts)):
-        if parts[i].startswith(r"\begin{equation"):
-            continue  # 公式块内不动
-        # 块外按 $ 再切，偶数段 = text mode
-        segs = parts[i].split("$")
+
+    # 收集所有受保护块：(start, end, 处理后的内容)
+    protected: list[tuple[int, int, str]] = []
+
+    # 1) \begin{env}...\end{env} 环境
+    _env_re = re.compile(
+        r"\\begin\{(equation|align|gather|multline|split|aligned|gathered|cases|"
+        r"matrix|pmatrix|bmatrix|vmatrix|smallmatrix|array|subarray|tabularx)"
+        r"\*?\}.*?\\end\{\1\*?\}",
+        re.DOTALL,
+    )
+    for m in _env_re.finditer(s):
+        content = m.group(0)
+        env_name = m.group(1)
+        if env_name == "tabularx":
+            # tabularx: & 是列分隔符保留；_ % # 仍需 text-mode 转义
+            content = re.sub(r"(?<!\\)_", r"\_", content)
+            content = re.sub(r"(?<!\\)%", r"\%", content)
+            content = re.sub(r"(?<!\\)#", r"\#", content)
+        # 其他 math 环境：全部不动
+        protected.append((m.start(), m.end(), content))
+
+    # 2) \[...\] 和 \(...\) display/inline math
+    _display_re = re.compile(r"\\\[.*?\\\]|\\\(.*?\\\)", re.DOTALL)
+    for m in _display_re.finditer(s):
+        # 避免嵌套（已经在 env 内的跳过）
+        if not any(p[0] <= m.start() < p[1] for p in protected):
+            protected.append((m.start(), m.end(), m.group(0)))
+
+    # 3) 合并重叠/相邻区间
+    protected.sort()
+    merged: list[tuple[int, int, str]] = []
+    for start, end, content in protected:
+        if merged and start < merged[-1][1]:
+            prev_start, prev_end, prev_content = merged.pop()
+            merged.append((prev_start, max(prev_end, end), prev_content + content[prev_end - start:]))
+        else:
+            merged.append((start, end, content))
+
+    # 4) 重建：未保护段做 4 个字符转义
+    result: list[str] = []
+    pos = 0
+    for start, end, content in merged:
+        if pos < start:
+            text = s[pos:start]
+            segs = text.split("$")
+            for j in range(0, len(segs), 2):
+                segs[j] = re.sub(r"(?<!\\)_", r"\_", segs[j])
+                segs[j] = re.sub(r"(?<!\\)%", r"\%", segs[j])
+                segs[j] = re.sub(r"(?<!\\)&", r"\&", segs[j])
+                segs[j] = re.sub(r"(?<!\\)#", r"\#", segs[j])
+            result.append("$".join(segs))
+        result.append(content)
+        pos = end
+
+    if pos < len(s):
+        text = s[pos:]
+        segs = text.split("$")
         for j in range(0, len(segs), 2):
             segs[j] = re.sub(r"(?<!\\)_", r"\_", segs[j])
             segs[j] = re.sub(r"(?<!\\)%", r"\%", segs[j])
             segs[j] = re.sub(r"(?<!\\)&", r"\&", segs[j])
             segs[j] = re.sub(r"(?<!\\)#", r"\#", segs[j])
-        parts[i] = "$".join(segs)
-    return "".join(parts)
+        result.append("$".join(segs))
+
+    return "".join(result)
 
 
 # 长 inline math token：含 `=` 或 `\leq` / `\geq` / `\sum` / `\prod` 且长度 >= 10

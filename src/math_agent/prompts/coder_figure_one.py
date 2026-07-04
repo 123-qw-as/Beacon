@@ -36,6 +36,9 @@ def build_prompt_figure_one(model, purpose: str, prev_failure=None, prev_error_k
     return (
         f"# 模型描述\n{model.description}\n\n# 方程\n{eqs}\n\n# 变量\n{vars_}\n\n"
         f"# 当前绘图任务\n{purpose}\n{fb}\n\n"
-        f"请为上述绘图任务生成一段**独立可运行**的 Python 脚本。"
+        f"请为上述绘图任务生成一段**独立可运行**的 Python 脚本。\n"
+        f"脚本末尾必须用 print 输出关键指标，格式严格如下：\n"
+        f"print(f'RESULT: baseline=ours total_cost={{total_cost}} service_rate={{service_rate}}')\n"
+        f"（指标名按题目调整，但必须以 RESULT: baseline=ours 开头，供对比表使用）\n\n"
         f"请输出 JSON：{{\"purpose\": str, \"code\": str}}，code 字段是完整的 Python 源码。"
     )

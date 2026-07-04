@@ -3,6 +3,7 @@ from math_agent.nodes.latex import (
     latex_node, _wrap_unicode_math, _md_headings_to_latex, _md_inline_code_to_math,
     _wrap_naked_subscripts, _md_bold_to_latex, _md_bullets_to_latex, _md_table_to_latex,
     _escape_remaining_underscores, _promote_inline_equations,
+    _prepare_section,
 )
 
 
@@ -492,3 +493,39 @@ def test_prepare_section_defuses_nested_inline_in_display():
     # 修复前的症状：会变成 \[ \min \sum\_{k} $d_{ij}$ $x_{ijk}$ \]
     assert "$d_{ij}$" not in out
     assert "$x_{ijk}$" not in out
+
+
+def test_md_table_does_not_double_escape_ampersand():
+    """I2 回归：已转义的 \\& 不应被二次转义为 \\\\&（会变成换行+列分隔符）。"""
+    bs = chr(92)  # backslash
+    s = f"| x | 固定{bs}&变动成本 | 元 |\n|---|---|---|"
+    out = _md_table_to_latex(s)
+    x_line = [l for l in out.split("\n") if "固定" in l][0]
+    # 不应含双反斜杠+& (双转义)
+    assert bs + bs + "&" not in x_line, f"double-escaped: {x_line!r}"
+    # 应含单反斜杠+& (正确转义)
+    assert bs + "&" in x_line
+
+
+def test_complete_section_escapes_percent_in_textbf():
+    """P0-1 回归：**56.7%** → \\textbf{56.7\\%}，% 必须转义。"""
+    bs = chr(92)
+    out = _prepare_section("成本降低 **56.7%**")
+    assert bs + "textbf{56.7" + bs + "%}" in out
+    assert "56.7%}" not in out  # 不应有裸 %
+
+
+def test_complete_section_escapes_amp_hash_percent_in_text():
+    """P0-2 回归：文本段里的 & # % 都要转义。"""
+    bs = chr(92)
+    out = _prepare_section("100% 完成 & 排名 #1")
+    assert "100" + bs + "%" in out
+    assert bs + "&" in out
+    assert bs + "#" in out
+
+
+def test_complete_section_preserves_math_subsets():
+    r"""P1-1 回归：\subseteq 不被拆分为 \subset\,eq。"""
+    out = _prepare_section(r"集合 $A \subseteq B$")
+    assert r"\subseteq" in out
+    assert r"\subset\,eq" not in out
