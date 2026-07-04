@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from typing import Any, Type, TypeVar
@@ -221,10 +222,10 @@ def complete(
         parsed, parse_err = _parse_json_with_latex_repair(content, schema)
         if parsed is not None:
             return parsed
-        # 直接解析失败（syntax error 等）——回退到反斜杠双写后重试
-        patched = content
-        for esc in (r"\b", r"\t", r"\f"):
-            patched = patched.replace(esc, r"\\" + esc[1:])
+        # 直接解析失败——回退到反斜杠双写后重试
+        # P1: 双写所有非法 JSON 转义（\h \s \m \S \l 等，排除合法的 \b \f \n \r \t \u \" \\ \/）
+        # 用正则 (?<!\\) 确保不误伤已正确转义的 \\hat（第二个 \ 前有 \）
+        patched = _double_illegal_json_backslashes(content)
         if patched != content:
             parsed, _ = _parse_json_with_latex_repair(patched, schema)
             if parsed is not None:
@@ -254,33 +255,74 @@ def _parse_json_with_latex_repair(
     return obj, None
 
 
-# 0x08/0x09/0x0C → 对应的 LaTeX 字面宏前缀（反斜杠+字母）
-_CTRL_TO_LATEX = {0x08: r"\b", 0x09: r"\t", 0x0C: r"\f"}
+# 0x08/0x09/0x0C/0x0A/0x0D → 对应的 LaTeX 字面宏前缀（反斜杠+字母）
+# json.loads 对 \b \t \f \n \r 静默接受（合法转义），会吃掉反斜杠产出裸控制字符
+_CTRL_TO_LATEX = {0x08: "b", 0x09: "t", 0x0C: "f", 0x0A: "n", 0x0D: "r"}
 _CTRL_CHARS = set(_CTRL_TO_LATEX)  # int codepoints
+
+# JSON 合法转义目标字符：\b \f \n \r \t \uXXXX \" \\ \/
+# 非法转义（\h \s \m \l \S 等）会触发 JSONDecodeError，需在 pre-parse 双写反斜杠
+_ILLEGAL_JSON_ESCAPE_RE = re.compile(r'(?<!\\)\\([^bfnrtu"\\/])')
+
+
+def _double_illegal_json_backslashes(content: str) -> str:
+    r"""双写非法 JSON 转义的反斜杠，保留合法转义。
+
+    LLM 欠转义 \hat 时，\h 不是合法 JSON 转义 → JSONDecodeError。
+    此函数把 \h 双写成 \\h，让 json.loads 正确解析为字面 \h。
+    合法转义 \b \f \n \r \t 等不动（LLM 可能故意用它们表示控制字符）。
+    (?<!\\) 否定后顾：不匹配已正确转义的 \\hat 里的第二个 \。
+    """
+    return _ILLEGAL_JSON_ESCAPE_RE.sub(lambda m: "\\" + "\\" + m.group(1), content)
+
+# 每个控制字符后可能跟的 LaTeX 宏字母前缀（损坏特征）。
+# 只在这些前缀匹配时才还原，避免误伤正常换行/TAB。
+# 例：0x0A + 'abla' → \nabla；0x09 + 'ext' → \text；0x08 + 'ar' → \bar
+_CTRL_MACRO_PREFIXES = {
+    0x08: ("ar", "oldsymbol", "egin", "eta", "igl", "igr", "ox", "old"),
+    0x09: ("ext", "ilde", "heta", "imes", "op", "au", "abular", "au"),
+    0x0C: ("rac", "orall", "lot", "igure"),
+    0x0A: ("abla", "ewcommand", "ewenvironment", "ode", "onumber", "u",
+           "ot", "eq", "ewline", "uance"),
+    0x0D: ("brace", "floor", "ceil", "estriction", "angle", "ight"),
+}
 
 
 def _repair_string(s: str) -> str:
-    """把字符串里的 0x08/0x09/0x0C 控制字符还原为 \\b/\\t/\\f。
+    r"""把字符串里被 json.loads 吃掉反斜杠的控制字符还原为 LaTeX 宏。
 
-    这些控制字符是 json.loads 把 LLM 欠转义的 \\b/\\t/\\f 解析后的产物。
-    还原时注意：如果控制字符前面已有反斜杠（Case D 三反斜杠），
-    说明反斜杠来自正确转义，只需把控制字符还原为对应字母。
+    策略：只有当控制字符后跟已知 LaTeX 宏字母前缀时才还原，
+    避免误伤正常换行符(0x0A)、TAB 缩进(0x09)等合法控制字符。
+    如果控制字符前已有反斜杠（Case D 三反斜杠），只补字母。
     """
     if not any(ord(c) in _CTRL_CHARS for c in s):
         return s
     result = []
-    for ch in s:
+    i = 0
+    while i < len(s):
+        ch = s[i]
         code = ord(ch)
         if code in _CTRL_TO_LATEX:
-            # 检查前一个字符是否已是反斜杠（Case D: \\ + <TAB> → \\ + t）
-            if result and result[-1] == "\\":
-                # 反斜杠已存在，只需补字母
-                result.append(_CTRL_TO_LATEX[code][1])  # 'b'/'t'/'f'
+            letter = _CTRL_TO_LATEX[code]
+            # 检查后跟是否匹配已知宏前缀
+            rest = s[i + 1:i + 15]
+            matched_prefix = None
+            for prefix in _CTRL_MACRO_PREFIXES.get(code, ()):
+                if rest.startswith(prefix):
+                    matched_prefix = prefix
+                    break
+            if matched_prefix is not None:
+                # 是损坏还原图：补反斜杠+字母（或只补字母，若前已有反斜杠）
+                if result and result[-1] == "\\":
+                    result.append(letter)
+                else:
+                    result.append("\\" + letter)
             else:
-                # 裸控制字符（Case B），补完整反斜杠+字母
-                result.append(_CTRL_TO_LATEX[code])  # r"\b"/r"\t"/r"\f"
+                # 不跟宏前缀 → 正常控制字符，保留不动
+                result.append(ch)
         else:
             result.append(ch)
+        i += 1
     return "".join(result)
 
 

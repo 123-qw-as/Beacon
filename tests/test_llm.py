@@ -287,3 +287,91 @@ def test_complete_repairs_under_escaped_latex_json(mocker):
     assert isinstance(out, _LatexOut)
     assert r"\text" in out.model_section, f"\\text 未被修复: {out.model_section!r}"
     assert chr(9) not in out.model_section, f"含 TAB: {out.model_section!r}"
+
+
+def test_complete_repairs_illegal_json_escape_hat(mocker):
+    r"""P1: LLM 欠转义 \hat（\h 不是合法 JSON 转义 → JSONDecodeError）。
+
+    旧 fallback 只双写 \b/\t/\f，碰不到 \h/\s/\m/\S 等。
+    修复后 pre-parse fallback 应双写所有非法 JSON 转义。
+    """
+    # \hat 欠转义：wire 上 \hat{x}（\h 非法 JSON 转义）
+    payload = r'{"model_section": "$\hat{x}$"}'
+    mocker.patch(
+        "litellm.completion",
+        return_value=mocker.MagicMock(
+            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
+        ),
+    )
+    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
+    assert isinstance(out, _LatexOut)
+    assert r"\hat{x}" in out.model_section, f"\\hat 未被修复: {out.model_section!r}"
+
+
+def test_complete_repairs_illegal_json_escape_sum_lambda(mocker):
+    r"""P1: \sum/\lambda/\Sigma 欠转义（\s/\l/\S 非法 JSON 转义）。"""
+    payload = r'{"model_section": "$\sum_{i} + \lambda + \Sigma$"}'
+    mocker.patch(
+        "litellm.completion",
+        return_value=mocker.MagicMock(
+            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
+        ),
+    )
+    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
+    assert isinstance(out, _LatexOut)
+    assert r"\sum_{i}" in out.model_section, f"\\sum 未被修复: {out.model_section!r}"
+    assert r"\lambda" in out.model_section, f"\\lambda 未被修复: {out.model_section!r}"
+    assert r"\Sigma" in out.model_section, f"\\Sigma 未被修复: {out.model_section!r}"
+
+
+def test_complete_repairs_nabla_rfloor_under_escaped(mocker):
+    r"""P0: \nabla/\rfloor 欠转义（\n/\r 是合法 JSON 转义 → 静默损坏为 0x0A/0x0D）。
+
+    json.loads 把 \n 当换行、\r 当 CR，吃掉反斜杠。
+    _repair_string 应把 0x0A→\n、0x0D→\r 还原。
+    """
+    # \nabla 欠转义：\n 是合法 JSON 转义（换行），json.loads 静默接受
+    payload = r'{"model_section": "$\nabla f$ 和 $\rfloor x$"}'
+    mocker.patch(
+        "litellm.completion",
+        return_value=mocker.MagicMock(
+            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
+        ),
+    )
+    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
+    assert isinstance(out, _LatexOut)
+    assert r"\nabla" in out.model_section, f"\\nabla 未被修复: {out.model_section!r}"
+    assert r"\rfloor" in out.model_section, f"\\rfloor 未被修复: {out.model_section!r}"
+    assert chr(10) not in out.model_section, f"含换行符: {out.model_section!r}"
+    assert chr(13) not in out.model_section, f"含 CR: {out.model_section!r}"
+
+
+def test_repair_string_preserves_normal_newlines():
+    """_repair_string 不应误伤正常换行符（0x0A 不跟 LaTeX 宏前缀）。
+
+    LLM 故意在 JSON 里用 \n 表示换行是合法行为，修复后的文本应保留换行。
+    只有 0x0A 后跟 LaTeX 宏字母序列（如 abla/ewcommand/ode）时才是损坏。
+    """
+    normal = "first paragraph.\nsecond paragraph."
+    out = llm._repair_string(normal)
+    assert out == normal, f"正常换行被误伤: {out!r}"
+
+
+def test_repair_string_preserves_normal_tabs():
+    """_repair_string 不应误伤正常 TAB（0x09 不跟 LaTeX 宏前缀）。
+
+    代码块缩进等场景会有正常 TAB，不应被转义为 \\t。
+    """
+    normal = "col1\tcol2\tcol3"
+    out = llm._repair_string(normal)
+    assert out == normal, f"正常 TAB 被误伤: {out!r}"
+
+
+def test_repair_string_preserves_normal_paragraph_after_math():
+    """0x0A 后跟普通单词（非 LaTeX 宏）不应误转。
+
+    如 '$x$ 后\n下一句'：\n+下 不是 \nabla 损坏。
+    """
+    normal = "$x$ 后\n下一句"
+    out = llm._repair_string(normal)
+    assert out == normal, f"误转: {out!r}"
