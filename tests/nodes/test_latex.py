@@ -181,6 +181,31 @@ def test_escape_remaining_underscores_skips_equation_blocks():
     assert "file\\_y.png" in out
 
 
+def test_escape_remaining_underscores_skips_math_inside_tabularx():
+    """tabularx cell 内的 $...$ math 模下标不能被转义。
+
+    回归 phase2_final：符号表的 $D_{i,t}$ 被 escape 成 $D\\_{i,t}$，
+    下标失效，渲染成 D_{i,t}（无下标效果）。
+    """
+    s = (
+        "\\begin{tabularx}{\\linewidth}{XX}\n"
+        "\\toprule\n"
+        "符号 & 含义 \\\\\n"
+        "\\midrule\n"
+        "$D_{i,t}$ & 站点需求 \\\\\n"
+        "$\\hat{D}_{i,t}^{(\\alpha)}$ & 预测值 \\\\\n"
+        "file_name.png & 文件名 \\\\\n"
+        "\\bottomrule\n"
+        "\\end{tabularx}\n"
+    )
+    out = _escape_remaining_underscores(s)
+    # math 模内下标不转义
+    assert r"$D_{i,t}$" in out, f"math 内下标被转义: {out!r}"
+    assert r"$\hat{D}_{i,t}^{(\alpha)}$" in out, f"math 内下标被转义: {out!r}"
+    # text 模文件名仍转义
+    assert r"file\_name.png" in out, f"文件名未转义: {out!r}"
+
+
 def test_md_inline_code_preserves_normal_text():
     """没有反引号的字符串不动。"""
     s = "纯文本，无 backticks"
@@ -309,6 +334,44 @@ def test_promote_inline_equations_eats_trailing_punctuation():
 def test_md_table_to_latex_no_op_when_no_table():
     s = "无表格段落，但有 | 符号 |。"
     assert _md_table_to_latex(s) == s
+
+
+def test_promote_inline_equations_skips_inside_tabularx():
+    """表格 cell 内的长 inline math 不应提升为 equation 块。
+
+    回归 phase2_final：notation 表的 MAE/RMSE 行含
+    $\\text{MAE}=\\frac{1}{NT}\\sum...$，被 _promote_inline_equations
+    提升为 \\begin{equation}，导致 tabularx 内嵌块级环境 → 100 个 LaTeX 错误。
+    """
+    s = (
+        "\\begin{tabularx}{\\linewidth}{XXXX}\n"
+        "\\toprule\n"
+        "符号 & 含义 & 单位 & 类别 \\\\\n"
+        "\\midrule\n"
+        "$\\text{MAE}$ & 预测误差，$\\text{MAE}=\\frac{1}{NT}\\sum_{i,t}|\\hat{D}_{i,t}-D_{i,t}|$ & 辆 & 指标 \\\\\n"
+        "\\bottomrule\n"
+        "\\end{tabularx}\n"
+    )
+    out = _promote_inline_equations(s)
+    assert r"\begin{equation}" not in out, (
+        f"表格内 inline math 被提升为 equation，会破坏 tabularx: {out!r}"
+    )
+    # 内联 math 应原样保留
+    assert r"$\text{MAE}=\frac{1}{NT}" in out
+
+
+def test_prepare_section_table_inline_math_not_promoted(workdir):
+    """端到端：markdown 表格含长 inline math → 转 tabularx 后不出现 equation。"""
+    md = (
+        "| 符号 | 含义 |\n"
+        "|------|------|\n"
+        "| $\\text{MAE}$ | 误差 $\\text{MAE}=\\frac{1}{NT}\\sum_{i,t}|D_i|$ |\n"
+    )
+    out = _prepare_section(md)
+    assert r"\begin{equation}" not in out, (
+        f"表格内 inline math 被提升: {out!r}"
+    )
+    assert r"\begin{tabularx}" in out
 
 
 def test_latex_node_title_only_first_line(mocker, workdir):

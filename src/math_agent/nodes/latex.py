@@ -464,6 +464,19 @@ def _md_table_to_latex(s: str) -> str:
     return "\n".join(out)
 
 
+def _escape_text_chars_skip_math(content: str, chars: str = "_%&#") -> str:
+    r"""转义 text-mode 特殊字符，但跳过 $...$ math 段。
+
+    用于 tabularx 等环境内：cell 里混有 text 和 inline math，
+    text 段的 _ % # 需转义，math 段的 _ 是下标不能动。
+    """
+    segs = content.split("$")
+    for i in range(0, len(segs), 2):  # 偶数段 = text，奇数段 = math
+        for ch in chars:
+            segs[i] = re.sub(rf"(?<!\\){re.escape(ch)}", rf"\{ch}", segs[i])
+    return "$".join(segs)
+
+
 def _escape_remaining_underscores(s: str) -> str:
     r"""对 $...$ 之外、math/tabularx 环境之外的 text-mode 特殊字符做转义。
 
@@ -495,10 +508,9 @@ def _escape_remaining_underscores(s: str) -> str:
         content = m.group(0)
         env_name = m.group(1)
         if env_name == "tabularx":
-            # tabularx: & 是列分隔符保留；_ % # 仍需 text-mode 转义
-            content = re.sub(r"(?<!\\)_", r"\_", content)
-            content = re.sub(r"(?<!\\)%", r"\%", content)
-            content = re.sub(r"(?<!\\)#", r"\#", content)
+            # tabularx: & 是列分隔符保留；_ % # 仍需 text-mode 转义，
+            # 但 $...$ math 模内的 _ 是下标语法，不能转义
+            content = _escape_text_chars_skip_math(content, chars="_%#")
         # 其他 math 环境：全部不动
         protected.append((m.start(), m.end(), content))
 
@@ -562,6 +574,8 @@ def _promote_inline_equations(s: str) -> str:
       3. 周围以中文标点（。，；：）或行边界结尾 → 说明 writer 用它当独立式
 
     不动：行内简单引用（`$x_i$`、`$\\alpha$`）；多个连续 inline math。
+    **跳过 tabularx 表格区域**——表格 cell 内的 inline math 提升为 equation
+    块会破坏 tabularx（块级环境不能嵌在表格单元里）。
     """
     if not s or "$" not in s:
         return s
@@ -571,6 +585,24 @@ def _promote_inline_equations(s: str) -> str:
             return False
         return any(ind in content for ind in _LONG_MATH_INDICATORS)
 
+    # 先按 tabularx 块切分，只对表格外文本做提升
+    _TABLE_SPLIT_RE = re.compile(
+        r"(\\begin\{tabularx\}.*?\\end\{tabularx\})",
+        re.DOTALL,
+    )
+    segments = _TABLE_SPLIT_RE.split(s)
+    result = []
+    for seg_idx, seg in enumerate(segments):
+        # split 的偶数索引 = 表格外文本，奇数索引 = tabularx 块（保留不动）
+        if seg_idx % 2 == 1:
+            result.append(seg)
+            continue
+        result.append(_promote_inline_in_text(seg))
+    return "".join(result)
+
+
+def _promote_inline_in_text(s: str) -> str:
+    """对不含 tabularx 表格的文本做 inline math → equation 提升。"""
     out = []
     i = 0
     while i < len(s):
@@ -587,7 +619,7 @@ def _promote_inline_equations(s: str) -> str:
             sep_chars = set("。，；：、 \n\t")
             before_ok = before == "" or before in sep_chars or before in "。，；：、"
             after_ok = after == "" or after in sep_chars or after in "。，；：、"
-            if _is_long_equation(content) and before_ok and after_ok:
+            if _is_long_equation_inner(content) and before_ok and after_ok:
                 # 提升为 equation 块；吃掉紧邻其后的中文标点（公式独占行后这些标点已冗余）
                 eat = end + 1
                 while eat < len(s) and s[eat] in "。，；：、 \t":
@@ -605,6 +637,12 @@ def _promote_inline_equations(s: str) -> str:
             out.append(s[i])
             i += 1
     return "".join(out)
+
+
+def _is_long_equation_inner(content: str) -> bool:
+    if len(content) < 10:
+        return False
+    return any(ind in content for ind in _LONG_MATH_INDICATORS)
 
 
 
