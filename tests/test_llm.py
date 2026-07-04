@@ -228,3 +228,62 @@ def test_json_escape_preserves_latex_backslash_b_t_f():
     assert chr(8) not in parsed, "含 backspace"
     assert chr(9) not in parsed, "含 tab"
     assert chr(12) not in parsed, "含 formfeed"
+
+
+class _LatexOut(BaseModel):
+    """模拟 writer section 输出 schema（含 LaTeX 的字符串字段）。"""
+    model_section: str
+
+
+def test_complete_preserves_correctly_escaped_latex_json(mocker):
+    """Case A: LLM 输出正确转义的 JSON（\\text 双反斜杠），不应被损坏。
+
+    这是 phase2_final 的根因：旧修复的 str.replace 把正确 JSON 里的
+    \\text 误伤成 \\\\\\text，json.loads 解析出 backslash+TAB+ext (0x5C 0x09)。
+    LLM 正确转义时，complete() 必须原样保留 \\text。
+    """
+    # LLM 正确输出 JSON：字符串值 \text{total} 在 JSON wire 上转义为 \\text{total}
+    # Python 源码里要用 \\\\ 表示 2 个真实反斜杠（JSON wire 上的 \\）
+    payload = '{"model_section": "\\\\text{total}"}'
+    # 验证 payload 字节：pos 20-21 应为 0x5C 0x5C（两个反斜杠）
+    pb = payload.encode()
+    idx = pb.find(b'text')
+    assert pb[idx-2:idx] == b'\x5c\x5c', f"payload 不是正确转义: {pb!r}"
+    mocker.patch(
+        "litellm.completion",
+        return_value=mocker.MagicMock(
+            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
+        ),
+    )
+    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
+    assert isinstance(out, _LatexOut)
+    # 必须是 \text{total}（backslash + t + ext），不能含控制字符
+    assert r"\text" in out.model_section, f"\\text 被损坏: {out.model_section!r}"
+    assert chr(9) not in out.model_section, f"含 TAB 控制字符: {out.model_section!r}"
+    assert chr(8) not in out.model_section, f"含 backspace: {out.model_section!r}"
+    assert chr(12) not in out.model_section, f"含 formfeed: {out.model_section!r}"
+
+
+def test_complete_repairs_under_escaped_latex_json(mocker):
+    """Case B: LLM 欠转义输出 \\text（单反斜杠，JSON \\t=TAB），应被修复为 \\text。
+
+    旧修复的目标场景：LLM 在 JSON 字符串里写了 \\text 而非 \\\\text，
+    json.loads 把 \\t 当 TAB 转义吃掉反斜杠。修复后应还原为 \\text。
+    """
+    # 欠转义：wire 上是 \text（单反斜杠），JSON \t = TAB
+    # 用 raw string r"\t" 确保 Python 不把 \t 解析成 TAB
+    payload = r'{"model_section": "\text{total}"}'
+    # 验证 payload 字节：pos 20 应为 0x5C（单反斜杠）
+    pb = payload.encode()
+    idx = pb.find(b'text')
+    assert pb[idx-1:idx] == b'\x5c', f"payload 不是欠转义: {pb!r}"
+    mocker.patch(
+        "litellm.completion",
+        return_value=mocker.MagicMock(
+            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
+        ),
+    )
+    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
+    assert isinstance(out, _LatexOut)
+    assert r"\text" in out.model_section, f"\\text 未被修复: {out.model_section!r}"
+    assert chr(9) not in out.model_section, f"含 TAB: {out.model_section!r}"

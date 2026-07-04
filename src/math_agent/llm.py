@@ -209,18 +209,101 @@ def complete(
         if schema is None:
             return content
         # LLM 在 JSON 字符串里输出 LaTeX 命令 \beta/\big/\tau/\text/\top 时，
-        # \b \t \f 都是合法 JSON 转义（backspace/tab/formfeed），json.loads 会
-        # 把 "\beta" 解析成 0x08+eta，"\tau" 解析成 tab+au，丢了反斜杠。
-        # 修复：在 raw JSON 里把 \b \t \f 的反斜杠双写，让 json.loads 保留字面反斜杠。
-        # 注意：必须用 raw string r"\t" 匹配字面 backslash+t，普通 "\\t" 是 TAB 字符。
-        # ponytail: \n 不动——\newcommand 罕见且 \n 确实是换行意图居多
+        # \b \t \f 都是合法 JSON 转义（backspace/tab/formfeed）。
+        #
+        # 两种损坏路径：
+        #   Case A（正确转义）：LLM 写 \\text（JSON 标准），json.loads 正确得到 \text。
+        #     旧修复的 str.replace 会把 \\text 里的 \t 误伤成 \\\text → 解析出 0x5C+0x09。
+        #   Case B（欠转义）：LLM 写 \text（单反斜杠），json.loads 把 \t 当 TAB → 得到 0x09+ext。
+        #
+        # 修复策略：先直接解析（Case A 自然正确），解析后扫描控制字符并还原（Case B 修复）。
+        # 只在直接解析失败时，才用反斜杠双写兜底重试。
+        parsed, parse_err = _parse_json_with_latex_repair(content, schema)
+        if parsed is not None:
+            return parsed
+        # 直接解析失败（syntax error 等）——回退到反斜杠双写后重试
+        patched = content
         for esc in (r"\b", r"\t", r"\f"):
-            content = content.replace(esc, r"\\" + esc[1:])
-        try:
-            return schema.model_validate_json(content)
-        except (ValidationError, json.JSONDecodeError) as e:
-            last_err = LLMValidationError(str(e))
-            parse_feedback = (content, e)
-            continue
+            patched = patched.replace(esc, r"\\" + esc[1:])
+        if patched != content:
+            parsed, _ = _parse_json_with_latex_repair(patched, schema)
+            if parsed is not None:
+                return parsed
+        # 两种方式都失败，进入重试
+        last_err = LLMValidationError(parse_err or "JSON 解析失败")
+        parse_feedback = (content, parse_err or "JSON 解析失败")
+        continue
 
     raise LLMError(f"LLM 调用失败：{last_err}")
+
+
+def _parse_json_with_latex_repair(
+    content: str, schema: Type[T]
+) -> tuple[T | None, str | None]:
+    """解析 JSON 并修复 LaTeX 转义损坏的控制字符。
+
+    返回 (schema 实例, None) 成功，或 (None, 错误消息) 失败。
+    策略：先 model_validate_json，成功后递归扫描所有字符串字段，
+    把 0x08/0x09/0x0C 控制字符还原为 \\b/\\t/\\f（字面反斜杠+字母）。
+    """
+    try:
+        obj = schema.model_validate_json(content)
+    except (ValidationError, json.JSONDecodeError) as e:
+        return None, str(e)
+    _repair_control_chars_in_obj(obj)
+    return obj, None
+
+
+# 0x08/0x09/0x0C → 对应的 LaTeX 字面宏前缀（反斜杠+字母）
+_CTRL_TO_LATEX = {0x08: r"\b", 0x09: r"\t", 0x0C: r"\f"}
+_CTRL_CHARS = set(_CTRL_TO_LATEX)  # int codepoints
+
+
+def _repair_string(s: str) -> str:
+    """把字符串里的 0x08/0x09/0x0C 控制字符还原为 \\b/\\t/\\f。
+
+    这些控制字符是 json.loads 把 LLM 欠转义的 \\b/\\t/\\f 解析后的产物。
+    还原时注意：如果控制字符前面已有反斜杠（Case D 三反斜杠），
+    说明反斜杠来自正确转义，只需把控制字符还原为对应字母。
+    """
+    if not any(ord(c) in _CTRL_CHARS for c in s):
+        return s
+    result = []
+    for ch in s:
+        code = ord(ch)
+        if code in _CTRL_TO_LATEX:
+            # 检查前一个字符是否已是反斜杠（Case D: \\ + <TAB> → \\ + t）
+            if result and result[-1] == "\\":
+                # 反斜杠已存在，只需补字母
+                result.append(_CTRL_TO_LATEX[code][1])  # 'b'/'t'/'f'
+            else:
+                # 裸控制字符（Case B），补完整反斜杠+字母
+                result.append(_CTRL_TO_LATEX[code])  # r"\b"/r"\t"/r"\f"
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def _repair_control_chars_in_obj(obj: Any) -> None:
+    """递归遍历 Pydantic 模型/dict/list，就地修复所有字符串字段的控制字符。"""
+    if isinstance(obj, str):
+        return  # str 本身不可变，上层处理
+    if hasattr(obj, "__dict__"):
+        for field_name in list(obj.__dict__):
+            val = getattr(obj, field_name)
+            if isinstance(val, str):
+                setattr(obj, field_name, _repair_string(val))
+            else:
+                _repair_control_chars_in_obj(val)
+    elif isinstance(obj, dict):
+        for k, v in list(obj.items()):
+            if isinstance(v, str):
+                obj[k] = _repair_string(v)
+            else:
+                _repair_control_chars_in_obj(v)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            if isinstance(v, str):
+                obj[i] = _repair_string(v)
+            else:
+                _repair_control_chars_in_obj(v)
