@@ -63,12 +63,27 @@ def _setup_all_mocks(mocker, workdir):
     mocker.patch("math_agent.nodes.figure_pipeline.complete",
                  side_effect=[fc, fa])
 
-    mocker.patch("math_agent.nodes.writer.complete",
-                 return_value=PaperSections(
-                     abstract="a"*200, problem_restatement="x"*200, assumptions="x"*200,
-                     notation="x"*200, model_section="x"*200, solution="x"*200,
-                     sensitivity="x"*200, conclusion="x"*200, references="-",
-                 ))
+    # writer prep：大纲（WriterOutline schema）
+    # writer section：7 节，每节返回对应精简 schema。
+    # ponytail: 一个 side_effect 处理两种 schema，按 schema 类型分发。
+    from math_agent.prompts.writer_section import (
+        WriterOutline, _AbstractProblemOut, _AssumptionsNotationOut,
+        _ModelOut, _SolutionOut, _SensitivityOut, _ConclusionOut, _ReferencesOut,
+    )
+    _section_payloads = {
+        WriterOutline: WriterOutline(),
+        _AbstractProblemOut: _AbstractProblemOut(
+            abstract="a"*200, problem_restatement="x"*200, keywords="k"),
+        _AssumptionsNotationOut: _AssumptionsNotationOut(assumptions="x"*200, notation="x"*200),
+        _ModelOut: _ModelOut(model_section="x"*200),
+        _SolutionOut: _SolutionOut(solution="x"*200),
+        _SensitivityOut: _SensitivityOut(sensitivity="x"*200),
+        _ConclusionOut: _ConclusionOut(conclusion="x"*200),
+        _ReferencesOut: _ReferencesOut(references="-"),
+    }
+    def _writer_complete(prompt, *, schema, **kw):
+        return _section_payloads.get(schema, _section_payloads[WriterOutline])
+    mocker.patch("math_agent.nodes.writer.complete", side_effect=_writer_complete)
     mocker.patch("math_agent.nodes.paper_critic.complete",
                  return_value=CriticReport(target="paper", score=9, approved=True))
     mocker.patch("math_agent.nodes.evaluation.complete",

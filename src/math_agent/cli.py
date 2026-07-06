@@ -130,6 +130,29 @@ def resume(
 
 
 @app.command()
+def recover(
+    out: Path = typer.Option(Path("runs/latest")),
+    thread: str = typer.Option("default"),
+):
+    """从最近 checkpoint 续跑，不注入 human_decision。
+
+    用于 writer/coder/figure 等节点崩溃后的恢复。与 resume 的区别：
+    resume 注入 human_decision 服务 human_review；recover 纯续跑。
+    writer 子流程拆成 prep + section 循环后，section 崩溃不丢已完成节。
+    """
+    tracer = Tracer(thread_id=thread, out_dir=out)
+    tok = set_current(tracer)
+    try:
+        with _saver_cm(out) as saver:
+            g = build_graph(checkpointer=saver, interrupt_before=["human_review"])
+            g.invoke(None, config=_config(thread))
+    finally:
+        tracer.flush()
+        reset_current(tok)
+    typer.echo(f"recovered. trace at {out / 'trace.json'}")
+
+
+@app.command()
 def report(out: Path = typer.Option(Path("runs/latest"))):
     """打印一次运行的 trace 报告 + per-model / per-node 摘要。"""
     trace_path = out / "trace.json"

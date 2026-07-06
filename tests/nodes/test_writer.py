@@ -7,8 +7,9 @@ from math_agent.state import (
     SensitivityRun,
     FigureArtifact,
 )
-from math_agent.nodes.writer import writer_node, render_markdown
+from math_agent.nodes.writer import writer_node, writer_section_node, render_markdown
 from math_agent.prompts.writer import build_prompt
+from math_agent.prompts.writer_section import WriterOutline
 
 
 def _rich_state() -> MathModelingState:
@@ -45,18 +46,43 @@ def _rich_state() -> MathModelingState:
 
 
 def test_writer_fills_paper(mocker):
-    fake = PaperSections(
-        abstract="a"*200, problem_restatement="b"*200, assumptions="c"*200,
-        notation="d"*200, model_section="e"*200, solution="f"*200,
-        sensitivity="s"*200, conclusion="g"*200, references="h",
+    """prep 返回队列；section 节点逐节填充 paper。"""
+    from math_agent.prompts.writer_section import (
+        WriterOutline, _AbstractProblemOut, _AssumptionsNotationOut,
+        _ModelOut, _SolutionOut, _SensitivityOut, _ConclusionOut, _ReferencesOut,
     )
-    mocker.patch("math_agent.nodes.writer.complete", return_value=fake)
+    payloads = {
+        WriterOutline: WriterOutline(),
+        _AbstractProblemOut: _AbstractProblemOut(
+            abstract="a"*200, problem_restatement="b"*200, keywords="k"),
+        _AssumptionsNotationOut: _AssumptionsNotationOut(assumptions="c"*200, notation="d"*200),
+        _ModelOut: _ModelOut(model_section="e"*200),
+        _SolutionOut: _SolutionOut(solution="f"*200),
+        _SensitivityOut: _SensitivityOut(sensitivity="s"*200),
+        _ConclusionOut: _ConclusionOut(conclusion="g"*200),
+        _ReferencesOut: _ReferencesOut(references="h"),
+    }
+    mocker.patch("math_agent.nodes.writer.complete",
+                 side_effect=lambda prompt, *, schema, **kw: payloads[schema])
     s = MathModelingState(problem="p")
     s.model_versions.append(ModelVersion(stage="final", description="d"))
     s.code_artifacts.append(CodeArtifact(purpose="x", code="c", success=True, stdout="42"))
+
+    # prep：返回队列，不返回 paper
     delta = writer_node(s)
-    assert isinstance(delta["paper"], PaperSections)
-    assert delta["paper"].abstract.startswith("a")
+    assert delta["writer_iteration"] == 1
+    assert len(delta["writer_section_queue"]) == 7
+
+    # 逐节写完：把 prep 产出灌进 state，逐节调用 section node
+    s.writer_iteration = 1
+    s.writer_outline_dump = delta["writer_outline_dump"]
+    s.writer_retrieved_context = delta["writer_retrieved_context"]
+    s.writer_section_queue = delta["writer_section_queue"]
+    while s.writer_section_queue:
+        step = writer_section_node(s)
+        s.paper = step["paper"]
+        s.writer_section_queue = step["writer_section_queue"]
+    assert s.paper.abstract.startswith("a")
 
 
 def test_render_markdown_contains_sections():
@@ -128,12 +154,7 @@ def test_prompt_contains_chinese_style_blocklist():
 
 
 def test_writer_increments_writer_iteration(mocker):
-    fake = PaperSections(
-        abstract="a"*200, problem_restatement="b"*200, assumptions="c"*200,
-        notation="d"*200, model_section="e"*200, solution="f"*200,
-        sensitivity="s"*200, conclusion="g"*200, references="h",
-    )
-    mocker.patch("math_agent.nodes.writer.complete", return_value=fake)
+    mocker.patch("math_agent.nodes.writer.complete", return_value=WriterOutline())
     s = MathModelingState(problem="p")
     delta = writer_node(s)
     assert delta["writer_iteration"] == 1
@@ -178,7 +199,7 @@ def test_writer_does_not_query_rag_when_disabled(mocker):
     spy = mocker.patch("math_agent.nodes.writer.search")
     mocker.patch(
         "math_agent.nodes.writer.complete",
-        return_value=PaperSections(),
+        return_value=WriterOutline(),
     )
     _wn(_rich_state())
     spy.assert_not_called()
@@ -191,7 +212,7 @@ def test_writer_queries_rag_when_enabled(mocker):
     spy = mocker.patch("math_agent.nodes.writer.search", return_value=[])
     mocker.patch(
         "math_agent.nodes.writer.complete",
-        return_value=PaperSections(),
+        return_value=WriterOutline(),
     )
     _wn(_rich_state())
     spy.assert_called_once()
@@ -205,7 +226,7 @@ def test_writer_filters_rag_by_paper_source_type(mocker):
     spy = mocker.patch("math_agent.nodes.writer.search", return_value=[])
     mocker.patch(
         "math_agent.nodes.writer.complete",
-        return_value=PaperSections(),
+        return_value=WriterOutline(),
     )
     _wn(_rich_state())
     assert spy.call_args.kwargs.get("source_type") == "paper"

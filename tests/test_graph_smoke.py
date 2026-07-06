@@ -146,24 +146,55 @@ def test_writer_paper_critic_loop_isolated(mocker):
     """
     from langgraph.graph import StateGraph, END
     from math_agent.state import MathModelingState as _S
-    from math_agent.nodes.writer import writer_node
+    from math_agent.nodes.writer import writer_node, writer_section_node
     from math_agent.nodes.paper_critic import paper_critic_node
-    from math_agent.routing import after_paper_critic
+    from math_agent.routing import after_paper_critic, after_writer_step
     from math_agent.prompts.writer_section import (
         WriterOutline, writer_sections, schema_for_group,
+        _AbstractProblemOut, _AssumptionsNotationOut,
+        _ModelOut, _SolutionOut, _SensitivityOut, _ConclusionOut, _ReferencesOut,
     )
 
-    def _paper(mk):
-        return PaperSections(abstract=mk * 100, problem_restatement="x" * 150,
-                             assumptions="x" * 150, notation="x" * 150,
-                             model_section="x" * 400, solution="x" * 200,
-                             sensitivity="x" * 150, conclusion="x" * 150, references="-")
+    # ponytail: schema-dispatching mock。两轮：v1（首轮）/v2（重试轮）。
+    # abstract 用 mk 标记区分两轮，其余字段固定。
+    _round = {"i": 0}  # 0=v1, 1=v2
 
-    outline = WriterOutline(abstract="thesis")
-    # 首轮：1 大纲 + 7 分章（v1）
-    # 重试轮：7 分章（v2）
-    seq = [outline] + [_paper("v1")] * 7 + [_paper("v2")] * 7
-    mocker.patch("math_agent.nodes.writer.complete", side_effect=seq)
+    def _section_out(schema, mk):
+        common = dict(problem_restatement="x"*150, assumptions="x"*150, notation="x"*150,
+                      model_section="x"*400, solution="x"*200, sensitivity="x"*150,
+                      conclusion="x"*150, references="-", keywords="")
+        if schema is _AbstractProblemOut:
+            return _AbstractProblemOut(abstract=mk*100, problem_restatement="x"*150, keywords="")
+        if schema is _AssumptionsNotationOut:
+            return _AssumptionsNotationOut(assumptions="x"*150, notation="x"*150)
+        if schema is _ModelOut:
+            return _ModelOut(model_section="x"*400)
+        if schema is _SolutionOut:
+            return _SolutionOut(solution="x"*200)
+        if schema is _SensitivityOut:
+            return _SensitivityOut(sensitivity="x"*150)
+        if schema is _ConclusionOut:
+            return _ConclusionOut(conclusion="x"*150)
+        if schema is _ReferencesOut:
+            return _ReferencesOut(references="-")
+        return None
+
+    section_calls = {"n": 0}
+
+    def _writer_complete(prompt, *, schema, **kw):
+        if schema is WriterOutline:
+            # 大纲：首轮后切换到 v2 标记
+            mk = "v1" if _round["i"] == 0 else "v2"
+            return WriterOutline(abstract=mk)
+        # section 调用：首轮 7 次后切到 v2
+        section_calls["n"] += 1
+        mk = "v1" if _round["i"] == 0 else "v2"
+        out = _section_out(schema, mk)
+        if section_calls["n"] % 7 == 0 and _round["i"] == 0:
+            _round["i"] = 1  # 首轮 7 节写完，下一轮 prep 会切 v2
+        return out
+
+    mocker.patch("math_agent.nodes.writer.complete", side_effect=_writer_complete)
     mocker.patch("math_agent.nodes.paper_critic.complete", side_effect=[
         CriticReport(target="paper", score=4, approved=False,
                      issues=[CriticIssue(problem="编数字")], suggestions=["改定性"]),
@@ -172,9 +203,13 @@ def test_writer_paper_critic_loop_isolated(mocker):
 
     g = StateGraph(_S)
     g.add_node("writer", writer_node)
+    g.add_node("writer_section", writer_section_node)
     g.add_node("paper_critic", paper_critic_node)
     g.set_entry_point("writer")
-    g.add_edge("writer", "paper_critic")
+    g.add_conditional_edges("writer", after_writer_step,
+                            {"section": "writer_section", "done": "paper_critic"})
+    g.add_conditional_edges("writer_section", after_writer_step,
+                            {"section": "writer_section", "done": "paper_critic"})
     g.add_conditional_edges("paper_critic", after_paper_critic,
                             {"retry": "writer", "advance": END})
     compiled = g.compile()

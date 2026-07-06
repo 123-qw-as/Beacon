@@ -1,4 +1,8 @@
-"""Plan D Phase 2：writer 分章节多调用架构测试。"""
+"""Plan D Phase 2：writer 分章节多调用架构测试。
+
+Phase 1.5 改造后：writer_node 是 prep（大纲 + 填充队列），writer_section_node 逐节写。
+测试通过 prep + 循环 section 模拟完整写作流程。
+"""
 from math_agent.state import (
     MathModelingState,
     ModelVersion,
@@ -10,7 +14,7 @@ from math_agent.state import (
     CriticReport,
     CriticIssue,
 )
-from math_agent.nodes.writer import writer_node
+from math_agent.nodes.writer import writer_node, writer_section_node
 from math_agent.prompts.writer_section import (
     WriterOutline,
     _sections_to_rewrite,
@@ -61,17 +65,31 @@ def _make_complete_side_effect():
     return _side, calls
 
 
+def _run_writer_full(s):
+    """跑完整 writer 子流程：prep + 逐节 drain 队列，返回最终 paper。"""
+    delta = writer_node(s)
+    s.writer_iteration = delta["writer_iteration"]
+    s.writer_outline_dump = delta["writer_outline_dump"]
+    s.writer_retrieved_context = delta["writer_retrieved_context"]
+    s.writer_section_queue = delta["writer_section_queue"]
+    while s.writer_section_queue:
+        step = writer_section_node(s)
+        s.paper = step["paper"]
+        s.writer_section_queue = step["writer_section_queue"]
+    return s.paper
+
+
 # ---------------------------------------------------------------------------
 # Pass 1 + Pass 2 调用结构
 # ---------------------------------------------------------------------------
 
 def test_writer_makes_outline_then_per_section_calls(mocker):
-    """首轮：1 次大纲 + 7 次分章 = 8 次 complete 调用。"""
+    """首轮：1 次大纲（prep）+ 7 次分章（section 循环）= 8 次 complete 调用。"""
     side, calls = _make_complete_side_effect()
     mocker.patch("math_agent.nodes.writer.complete", side_effect=side)
     s = _rich_state()
 
-    delta = writer_node(s)
+    paper = _run_writer_full(s)
 
     assert len(calls) == 8
     # 第一次是大纲
@@ -79,18 +97,18 @@ def test_writer_makes_outline_then_per_section_calls(mocker):
     # 后 7 次是分组 schema（顺序与 writer_sections 一致）
     expected_schemas = [schema_for_group(g.name) for g in writer_sections()]
     assert calls[1:] == expected_schemas
-    # 返回的 paper 是 PaperSections 且字段被填充
-    assert isinstance(delta["paper"], PaperSections)
-    assert delta["paper"].abstract == "VAL_abstract"
-    assert delta["paper"].keywords == "VAL_keywords"
-    assert delta["paper"].model_section == "VAL_model_section"
+    # 最终 paper 字段被填充
+    assert isinstance(paper, PaperSections)
+    assert paper.abstract == "VAL_abstract"
+    assert paper.keywords == "VAL_keywords"
+    assert paper.model_section == "VAL_model_section"
 
 
 def test_writer_first_iter_runs_all_seven_sections(mocker):
-    """首轮无 critic 时跑全部 7 分组。"""
+    """首轮无 critic 时跑全部 7 分组（+ 1 大纲 = 8 次）。"""
     side, calls = _make_complete_side_effect()
     mocker.patch("math_agent.nodes.writer.complete", side_effect=side)
-    writer_node(_rich_state())
+    _run_writer_full(_rich_state())
     # 8 = 1 outline + 7 sections
     assert len(calls) == 8
 
@@ -119,18 +137,18 @@ def test_writer_second_iter_only_rewrites_flagged_sections(mocker):
         issues=[CriticIssue(section="solution", problem="solution 数字未追溯")],
     ))
 
-    delta = writer_node(s)
+    paper = _run_writer_full(s)
 
-    # 只 1 次调用（solution 分组），无大纲
+    # 只 1 次 section 调用（solution 分组），无大纲
     assert len(calls) == 1
     assert calls[0] is schema_for_group("solution")
     # solution 被更新
-    assert delta["paper"].solution == "VAL_solution"
+    assert paper.solution == "VAL_solution"
     # 其余字段保留旧值
-    assert delta["paper"].abstract == "OLD_ABSTRACT"
-    assert delta["paper"].model_section == "OLD_M"
-    assert delta["paper"].keywords == "OLD_KW"
-    assert delta["paper"].references == "OLD_R"
+    assert paper.abstract == "OLD_ABSTRACT"
+    assert paper.model_section == "OLD_M"
+    assert paper.keywords == "OLD_KW"
+    assert paper.references == "OLD_R"
 
 
 def test_writer_second_iter_multiple_flagged_groups(mocker):
@@ -153,19 +171,19 @@ def test_writer_second_iter_multiple_flagged_groups(mocker):
         ],
     ))
 
-    delta = writer_node(s)
+    paper = _run_writer_full(s)
 
     # 2 次分组调用，无大纲；顺序遵循 writer_sections
     assert len(calls) == 2
     assert calls[0] is schema_for_group("abstract_problem")
     assert calls[1] is schema_for_group("assumptions_notation")
     # 被更新
-    assert delta["paper"].abstract == "VAL_abstract"
-    assert delta["paper"].keywords == "VAL_keywords"
-    assert delta["paper"].notation == "VAL_notation"
+    assert paper.abstract == "VAL_abstract"
+    assert paper.keywords == "VAL_keywords"
+    assert paper.notation == "VAL_notation"
     # 未触及的保留
-    assert delta["paper"].solution == "OS"
-    assert delta["paper"].model_section == "OM"
+    assert paper.solution == "OS"
+    assert paper.model_section == "OM"
 
 
 def test_writer_general_issue_rewrites_all_sections(mocker):
@@ -181,7 +199,7 @@ def test_writer_general_issue_rewrites_all_sections(mocker):
         issues=[CriticIssue(section="general", problem="整体结构松散")],
     ))
 
-    delta = writer_node(s)
+    _run_writer_full(s)
 
     # 无大纲 + 7 分组
     assert len(calls) == 7
@@ -190,7 +208,7 @@ def test_writer_general_issue_rewrites_all_sections(mocker):
 
 
 def test_writer_outline_skipped_on_retry(mocker):
-    """writer_iteration=1 → 不调用大纲（calls[0] 不是 WriterOutline）。"""
+    """writer_iteration=1 → 不调用大纲（calls 中无 WriterOutline）。"""
     side, calls = _make_complete_side_effect()
     mocker.patch("math_agent.nodes.writer.complete", side_effect=side)
 
@@ -202,7 +220,7 @@ def test_writer_outline_skipped_on_retry(mocker):
         issues=[CriticIssue(section="conclusion", problem="结论套话")],
     ))
 
-    writer_node(s)
+    _run_writer_full(s)
 
     assert WriterOutline not in calls
     # 只跑了 conclusion 分组
@@ -218,8 +236,8 @@ def test_writer_increments_iteration_multi_call(mocker):
     mocker.patch("math_agent.nodes.writer.complete", side_effect=side)
 
     s = _rich_state()
-    delta = writer_node(s)
-    assert delta["writer_iteration"] == 1
+    _run_writer_full(s)
+    assert s.writer_iteration == 1
 
     s2 = _rich_state()
     s2.writer_iteration = 1
@@ -228,8 +246,8 @@ def test_writer_increments_iteration_multi_call(mocker):
         target="paper", score=5, approved=False,
         issues=[CriticIssue(section="solution", problem="fix")],
     ))
-    delta2 = writer_node(s2)
-    assert delta2["writer_iteration"] == 2
+    _run_writer_full(s2)
+    assert s2.writer_iteration == 2
 
 
 # ---------------------------------------------------------------------------
@@ -292,9 +310,8 @@ def test_section_prompt_contains_iron_rules(mocker):
         return orig_side(prompt, schema=schema, **kwargs)
 
     mocker.patch("math_agent.nodes.writer.complete", side_effect=capture)
-    writer_node(_rich_state())
+    _run_writer_full(_rich_state())
 
-    # prompts[0] 是大纲（不含 IRON RULES 的完整 6 条？大纲模板也 include 了 partial）
     # 1 大纲 + 7 分章，每个都 include writer_iron_rules.md.j2
     assert len(prompts) == 8
     for p in prompts:

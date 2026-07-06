@@ -31,3 +31,11 @@ def after_paper_critic(state: MathModelingState) -> str:
     if critic.approved or state.writer_iteration >= MAX_WRITER_ITERATIONS:
         return "advance"
     return "retry"
+
+
+def after_writer_step(state: MathModelingState) -> str:
+    """writer 子流程：队列还有章节 → 继续写 section；空 → 进 paper_critic。
+
+    prep（writer_node）和 section（writer_section_node）共用此路由。
+    """
+    return "section" if state.writer_section_queue else "done"

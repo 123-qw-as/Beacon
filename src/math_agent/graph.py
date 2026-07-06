@@ -10,13 +10,13 @@ from math_agent.nodes.model_critic import model_critic_node
 from math_agent.nodes.coder import coder_node
 from math_agent.nodes.sensitivity import sensitivity_node
 from math_agent.nodes.figure_pipeline import figure_pipeline_node
-from math_agent.nodes.writer import writer_node
+from math_agent.nodes.writer import writer_node, writer_section_node
 from math_agent.nodes.paper_critic import paper_critic_node
 from math_agent.nodes.evaluation import evaluation_node
 from math_agent.nodes.human_review import human_review_node
 from math_agent.nodes.latex import latex_node
 from math_agent.nodes.table_assembler import table_assembler_node
-from math_agent.routing import after_model_critic, after_paper_critic
+from math_agent.routing import after_model_critic, after_paper_critic, after_writer_step
 
 
 def _advance_stage(state: MathModelingState) -> dict:
@@ -55,6 +55,7 @@ def build_graph(
     g.add_node("sensitivity", _wrap(sensitivity_node, "sensitivity"))
     g.add_node("figure_pipeline", _wrap(figure_pipeline_node, "figure_pipeline"))
     g.add_node("writer", _wrap(writer_node, "writer"))
+    g.add_node("writer_section", _wrap(writer_section_node, "writer_section"))
     g.add_node("paper_critic", _wrap(paper_critic_node, "paper_critic"))
     g.add_node("evaluation", _wrap(evaluation_node, "evaluation"))
     g.add_node("human_review", _wrap(human_review_node, "human_review"))
@@ -73,7 +74,17 @@ def build_graph(
     g.add_edge("coder", "sensitivity")
     g.add_edge("sensitivity", "figure_pipeline")
     g.add_edge("figure_pipeline", "writer")
-    g.add_edge("writer", "paper_critic")
+    # writer prep → section 循环 → paper_critic。每次 section 完成 = 一个 checkpoint。
+    g.add_conditional_edges(
+        "writer",
+        after_writer_step,
+        {"section": "writer_section", "done": "paper_critic"},
+    )
+    g.add_conditional_edges(
+        "writer_section",
+        after_writer_step,
+        {"section": "writer_section", "done": "paper_critic"},
+    )
     g.add_conditional_edges(
         "paper_critic",
         after_paper_critic,

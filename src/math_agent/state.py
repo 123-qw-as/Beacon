@@ -159,6 +159,12 @@ class MathModelingState(BaseModel):
     stage_target: ModelStage = "basic"  # 当前要产出的阶段
     problem_domains: list[str] = Field(default_factory=list)  # Plan D: analyst 输出，writer references 用
     errors: Annotated[list[str], add] = Field(default_factory=list)
+
+    # writer 子流程状态（覆盖语义）。队列空 = 本轮写完。
+    # ponytail: 队列即进度，不需要 completed_groups/current_group/pending_rewrite。
+    writer_section_queue: list[str] = Field(default_factory=list)
+    writer_outline_dump: dict = Field(default_factory=dict)   # WriterOutline.model_dump()
+    writer_retrieved_context: str = ""                        # RAG 检索结果，prep 查一次 section 复用
     # table_assembler 产出的清洗/注入警告（覆盖语义；每次 table_assembler 运行整体替换）
     table_warnings: list[str] = Field(default_factory=list)
 
