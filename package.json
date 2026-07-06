@@ -1,0 +1,16 @@
+{
+  "name": "math-agent",
+  "version": "0.1.0",
+  "description": "Multi-agent system for math modeling competition papers — with Web UI",
+  "private": true,
+  "scripts": {
+    "start": "node frontend/server.mjs",
+    "dev": "node --watch frontend/server.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

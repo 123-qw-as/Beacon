@@ -1,0 +1,218 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Beacon Math Agent</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="项目导航">
+        <a class="brand" href="#workspace" aria-label="Beacon 工作台">
+          <img src="./assets/beacon-logo.png" alt="Beacon logo" />
+          <span>
+            <strong>Beacon</strong>
+            <small>Math Modeling Agent</small>
+          </span>
+        </a>
+
+        <nav class="nav-list" aria-label="主要页面">
+          <a class="active" href="#workspace">工作台</a>
+          <a href="#pipeline">流水线</a>
+          <a href="#outputs">产物</a>
+          <a href="#knowledge">知识库</a>
+        </nav>
+
+        <section class="sidebar-panel">
+          <p class="eyebrow">当前模板</p>
+          <div class="template-switch" role="tablist" aria-label="论文模板">
+            <button class="active" type="button" data-template="default">Default</button>
+            <button type="button" data-template="gmcm">GMCM</button>
+          </div>
+          <p class="hint" id="templateHint">适配建模论文、代码、敏感性分析与 LaTeX 编译流程。</p>
+        </section>
+      </aside>
+
+      <main class="workspace" id="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Competition Paper Automation</p>
+            <h1>为数学建模队伍点亮从题目到论文的路径</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="ghost-button" type="button" id="importDemo">导入示例题</button>
+            <button class="primary-button" type="button" id="runPipeline">启动流水线</button>
+          </div>
+        </header>
+
+        <section class="status-strip" aria-label="运行概览">
+          <article>
+            <span>当前阶段</span>
+            <strong id="currentStage">Writer</strong>
+          </article>
+          <article>
+            <span>节点进度</span>
+            <strong id="nodeProgress">7 / 10</strong>
+          </article>
+          <article>
+            <span>质量评分</span>
+            <strong id="qualityScore">86.4</strong>
+          </article>
+          <article>
+            <span>输出目录</span>
+            <strong id="outputSummary">runs/ui-latest</strong>
+          </article>
+        </section>
+
+        <div class="layout-grid">
+          <section class="panel task-panel" aria-labelledby="task-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Problem Brief</p>
+                <h2 id="task-title">题目配置</h2>
+              </div>
+              <span class="badge" id="problemBadge">JSON</span>
+            </div>
+
+            <label class="field">
+              <span>赛题标题</span>
+              <input id="problemTitle" value="城市应急物资调度优化" />
+            </label>
+
+            <label class="field">
+              <span>背景与目标</span>
+              <textarea id="problemBrief" rows="8">根据多仓库、多车辆、动态需求与道路拥堵信息，建立可解释的调度模型，并输出可复现实验、图表与论文。</textarea>
+            </label>
+
+            <input class="visually-hidden" id="problemFile" type="file" accept=".json,.md,.txt,.pdf" />
+            <div class="upload-zone" tabindex="0" role="button" aria-label="上传题目 JSON 或 PDF" id="uploadZone">
+              <div class="upload-icon">+</div>
+              <div>
+                <strong id="uploadTitle">拖入题目文件</strong>
+                <span id="uploadMeta">支持 JSON、PDF、Markdown 题面</span>
+              </div>
+            </div>
+
+            <div class="control-row">
+              <label class="toggle">
+                <input id="ragToggle" type="checkbox" checked />
+                <span>启用 RAG 模型库</span>
+              </label>
+              <label class="toggle">
+                <input id="hitlToggle" type="checkbox" checked />
+                <span>Human-in-the-loop</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel pipeline-panel" id="pipeline" aria-labelledby="pipeline-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">LangGraph Pipeline</p>
+                <h2 id="pipeline-title">建模流水线</h2>
+              </div>
+              <button class="icon-button" type="button" id="resetPipeline" aria-label="刷新流水线" title="刷新流水线">↻</button>
+            </div>
+
+            <ol class="pipeline-list" id="pipelineList">
+              <li class="done"><span>Analyst</span><small>题意拆解与约束识别</small></li>
+              <li class="done"><span>Modeler</span><small>建立基础与改进模型</small></li>
+              <li class="done"><span>Model Critic</span><small>检查假设与推导漏洞</small></li>
+              <li class="done"><span>Coder</span><small>生成可运行实验代码</small></li>
+              <li class="done"><span>Sensitivity</span><small>参数扫描与鲁棒性分析</small></li>
+              <li class="done"><span>Figure Pipeline</span><small>图表渲染与质量评审</small></li>
+              <li class="active"><span>Writer</span><small>分章节生成论文草稿</small></li>
+              <li><span>Paper Critic</span><small>论文质量与格式评审</small></li>
+              <li><span>Evaluation</span><small>综合评分与改进建议</small></li>
+              <li><span>LaTeX</span><small>编译 PDF 并回退 Markdown</small></li>
+            </ol>
+          </section>
+
+          <section class="panel run-panel" aria-labelledby="run-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Run Control</p>
+                <h2 id="run-title">执行参数</h2>
+              </div>
+              <span class="live-dot" id="runState">Live</span>
+            </div>
+
+            <div class="metric-stack">
+              <label class="field compact">
+                <span>输出目录</span>
+                <input id="outputDir" value="runs/ui-latest" />
+              </label>
+              <label class="field compact">
+                <span>线程 ID</span>
+                <input id="threadId" value="default" />
+              </label>
+              <label class="field compact">
+                <span>迭代深度 <b id="iterationValue">3</b></span>
+                <input id="iterationDepth" type="range" min="1" max="5" value="3" />
+              </label>
+            </div>
+
+            <div class="command-preview" aria-label="命令预览">
+              <span>CLI</span>
+              <code id="commandPreview">math-agent run --problem problem.json --out runs/ui-latest --thread default</code>
+            </div>
+          </section>
+
+          <section class="panel output-panel" id="outputs" aria-labelledby="output-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Artifacts</p>
+                <h2 id="output-title">产物预览</h2>
+              </div>
+              <button class="ghost-button small" type="button" id="openOutputs">打开目录</button>
+            </div>
+
+            <div class="tabs" role="tablist" aria-label="产物类型">
+              <button class="active" type="button" data-tab="paper">论文</button>
+              <button type="button" data-tab="figures">图表</button>
+              <button type="button" data-tab="trace">Trace</button>
+            </div>
+
+            <div class="artifact-preview" id="artifactPreview">
+              <h3>应急物资调度优化模型</h3>
+              <p>摘要已生成，模型假设、符号说明、目标函数与约束系统正在整合为论文正文。</p>
+              <div class="paper-lines" aria-hidden="true">
+                <span></span><span></span><span></span><span></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel knowledge-panel" id="knowledge" aria-labelledby="knowledge-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Knowledge Base</p>
+                <h2 id="knowledge-title">知识库</h2>
+              </div>
+              <span class="badge" id="knowledgeBadge">RAG On</span>
+            </div>
+
+            <div class="knowledge-grid">
+              <article>
+                <strong>经典模型库</strong>
+                <span>优化、回归预测、评价模型、排队论与微分方程片段。</span>
+              </article>
+              <article>
+                <strong>优秀论文语料</strong>
+                <span>按摘要、模型、实验、图表和结论分块检索。</span>
+              </article>
+              <article>
+                <strong>引用与证据</strong>
+                <span>为 Analyst、Modeler、Writer 自动注入可追溯上下文。</span>
+              </article>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>
+
