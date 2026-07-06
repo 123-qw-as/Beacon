@@ -238,17 +238,39 @@ def complete(
     raise LLMError(f"LLM 调用失败：{last_err}")
 
 
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _extract_json(content: str) -> str:
+    """从 LLM 输出中提取 JSON 字符串。
+
+    处理两类常见污染：
+    1. <think></think> 思考标签（deepseek/kimi 系模型）：剥离。
+    2. 前导/尾随非 JSON 文本（markdown 代码块、解释文字）：提取第一个 {...} 块。
+    """
+    cleaned = _THINK_TAG_RE.sub("", content).strip()
+    if cleaned.startswith("{"):
+        return cleaned
+    m = _JSON_OBJECT_RE.search(cleaned)
+    if m:
+        return m.group(0)
+    return cleaned
+
+
 def _parse_json_with_latex_repair(
     content: str, schema: Type[T]
 ) -> tuple[T | None, str | None]:
     """解析 JSON 并修复 LaTeX 转义损坏的控制字符。
 
     返回 (schema 实例, None) 成功，或 (None, 错误消息) 失败。
-    策略：先 model_validate_json，成功后递归扫描所有字符串字段，
-    把 0x08/0x09/0x0C 控制字符还原为 \\b/\\t/\\f（字面反斜杠+字母）。
+    策略：先剥离 <think> 标签 + 提取 JSON 对象，再 model_validate_json，
+    成功后递归扫描所有字符串字段，把 0x08/0x09/0x0C 控制字符还原为
+    \\b/\\t/\\f（字面反斜杠+字母）。
     """
+    json_str = _extract_json(content)
     try:
-        obj = schema.model_validate_json(content)
+        obj = schema.model_validate_json(json_str)
     except (ValidationError, json.JSONDecodeError) as e:
         return None, str(e)
     _repair_control_chars_in_obj(obj)
