@@ -345,6 +345,19 @@ XeLaTeX produces the highest-quality PDF output. If it's not installed, Beacon a
 
 ---
 
+## Community
+
+<p align="center">
+  <strong>Beacon 技术交流群</strong><br />
+  <sub>QQ 扫码加入，交流数学建模、论文写作与 Agent 技术</sub>
+</p>
+
+<p align="center">
+  <img src="frontend/assets/qq-group-qrcode.jpg" alt="Beacon QQ Group" width="240" />
+</p>
+
+---
+
 ## License
 
 MIT © 2026
