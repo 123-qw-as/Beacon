@@ -37,7 +37,40 @@ def _minimal_env() -> dict[str, str]:
         # matplotlib 等库要求能解析 Path.home()
         "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME",
     ]
-    return {k: os.environ[k] for k in keys if k in os.environ}
+    env = {k: os.environ[k] for k in keys if k in os.environ}
+    # 强制子进程用 UTF-8 输出，避免 Windows 默认 GBK 编码导致 subprocess 解码崩溃
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
+import re as _re
+
+# LLM 生成代码常缺的 import。扫描代码体，缺哪个补哪个。
+# ponytail: 只补最常见 5 个库；复杂缺漏靠 retry 兜底，不做全量 ast 分析。
+_IMPORT_FIXES: list[tuple[str, str, str]] = [
+    # (检测标志, 缺 import 时补的行, 已有 import 的标志)
+    ("matplotlib.rcParams", "import matplotlib\nmatplotlib.use('Agg')", "import matplotlib"),
+    ("matplotlib.pyplot", "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt", "import matplotlib"),
+    ("plt\\.", "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt", "import matplotlib.pyplot"),
+    ("np\\.", "import numpy as np", "import numpy"),
+    ("pd\\.", "import pandas as pd", "import pandas"),
+]
+
+
+def _auto_fix_imports(code: str) -> str:
+    """检测 LLM 生成代码缺的 import 并自动补上。
+
+    只补常见库（matplotlib/numpy/pandas），避免 NameError 导致整段代码白跑。
+    已有对应 import 的不重复补。
+    """
+    prefix_lines: list[str] = []
+    for pattern, fix_line, already_marker in _IMPORT_FIXES:
+        if _re.search(pattern, code) and already_marker not in code:
+            prefix_lines.append(fix_line)
+    if not prefix_lines:
+        return code
+    return "\n".join(prefix_lines) + "\n" + code
 
 
 def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
@@ -45,6 +78,7 @@ def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
     # 相对 script 解释为相对于新 cwd，导致路径双重前缀。
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
+    code = _auto_fix_imports(code)   # 补缺的 import，避免 NameError 白跑
     script = workdir / "_run.py"
     script.write_text(code, encoding="utf-8")
 
@@ -56,6 +90,8 @@ def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
             cwd=workdir,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",   # 子进程可能输出 GBK/混合编码，replace 避免解码崩溃
             timeout=timeout,
             env=_minimal_env(),
         )

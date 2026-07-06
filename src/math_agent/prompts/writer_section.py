@@ -151,6 +151,35 @@ def _group_by_name(name: str) -> SectionGroup:
     raise KeyError(f"unknown section group: {name}")
 
 
+import re as _re
+# 提取 stdout 中的 RESULT: 行和 key=value 数值对，供 writer 引用
+_RESULT_NUM_RE = _re.compile(
+    r"(?:RESULT:\s*\S+\s+)?((?:\w+=\s*-?\d+\.?\d*(?:[eE][+-]?\d+)?\s*)+)",
+    _re.MULTILINE,
+)
+
+
+def _extract_available_numbers(state: MathModelingState) -> str:
+    """从 code_artifacts.stdout 和 sensitivity_runs 提取可用数值清单。
+
+    让 writer "只能用这些数值"，比 IRON RULE 的禁令更有效。
+    """
+    lines: list[str] = []
+    for a in state.code_artifacts:
+        if not a.success or not a.stdout:
+            continue
+        # 提取 RESULT: 行
+        for m in _RESULT_NUM_RE.finditer(a.stdout):
+            line = m.group(0).strip()
+            if line:
+                lines.append(f"  [{a.purpose}] {line}")
+    for r in state.sensitivity_runs:
+        lines.append(f"  [sensitivity] {r.parameter}={r.values} → {r.metric}={r.results}")
+    if not lines:
+        return ""
+    return "\n".join(lines[:30])  # 上限 30 行，控 prompt 长度
+
+
 # ---------------------------------------------------------------------------
 # prompt 构建器
 # ---------------------------------------------------------------------------
@@ -193,6 +222,7 @@ def build_section_prompt(
         "prior_critic": prior_critic if prior_critic is not None else state.latest_critic("paper"),
         "problem_domains": state.problem_domains,  # Plan D：analyst 输出
         "references_list": references_list or [],  # Plan D：检索到的真实文献
+        "available_numbers": _extract_available_numbers(state),  # 可引用的数值清单
         # 大纲锚点：每章一个 outline_<field> 变量
         "outline_abstract": outline.abstract,
         "outline_problem_restatement": outline.problem_restatement,
@@ -206,6 +236,10 @@ def build_section_prompt(
     }
     tmpl = _env.get_template(group.template)
     rendered = tmpl.render(**view)
+    # 注入可用数值清单：让 writer 只能引用这些数值，不得编造
+    numbers = view["available_numbers"]
+    if numbers:
+        rendered = rendered + "\n\n---\n## 可引用的数值清单（只能用以下数值，不得使用其他数值）\n" + numbers
     if retrieved_context:
         rendered = rendered + "\n\n" + retrieved_context
     return rendered

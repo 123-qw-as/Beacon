@@ -19,11 +19,11 @@
 - [{{ m.stage }}] {{ m.description[:80] }}
 {% endfor %}
 
-## 代码运行结果（关键结果摘要）
+## 代码运行结果（关键结果摘要，仅保留末尾 100 字符）
 {% for a in code_artifacts %}
 - [{{ loop.index }}] {{ a.purpose }} — success={{ a.success }}
 ```
-{{ a.stdout[-200:] }}
+{{ a.stdout[-100:] }}
 ```
 {% endfor %}
 
