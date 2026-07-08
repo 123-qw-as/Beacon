@@ -1,4 +1,4 @@
-﻿import "dotenv/config";
+import "dotenv/config";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
@@ -201,7 +201,6 @@ async function handleApi(request, response, url) {
         MATH_AGENT_RAG_ENABLED: body.ragEnabled === false ? "0" : "1",
         UV_CACHE_DIR: env.UV_CACHE_DIR || resolve(projectRoot, ".uv-cache"),
       },
-      shell: true,
       windowsHide: true,
     });
 

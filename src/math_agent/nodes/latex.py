@@ -403,7 +403,7 @@ def _md_table_to_latex(s: str) -> str:
     align 环境的列对齐符）不动。
     """
     def _escape_cell_amps(cell: str) -> str:
-        """转义 cell 里的裸 &，但跳过 $...$ math 模内的和已转义的 \&。"""
+        r"""转义 cell 里的裸 &，但跳过 $...$ math 模内的和已转义的 \&。"""
         parts = cell.split("$")
         for i in range(0, len(parts), 2):   # 偶数段 = text，奇数段 = math
             parts[i] = re.sub(r"(?<!\\)&", r"\&", parts[i])

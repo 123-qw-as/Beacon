@@ -277,7 +277,7 @@ def test_md_table_to_latex():
 
 
 def test_md_table_escapes_ampersand_in_cells():
-    """cell 内容里的裸 & 必须转义为 \&，否则 LaTeX 报 'Extra alignment tab' halt。
+    r"""cell 内容里的裸 & 必须转义为 \&，否则 LaTeX 报 'Extra alignment tab' halt。
     但 $...$ math 模内的 & 也不转义——math 里 & 有特殊语义（align 对齐）。
     这里测的是纯文本 & 转义。"""
     s = """| 符号 | 含义 | 单位 |
@@ -437,7 +437,7 @@ def test_pad_math_commands_splits_sum_stuck_to_exp():
 
 
 def test_pad_math_commands_leaves_legit_cdotp_alone():
-    """\cdotp 是合法命令名（不是 \cdot+p），不能拆。"""
+    r"""\cdotp 是合法命令名（不是 \cdot+p），不能拆。"""
     from math_agent.nodes.latex import _pad_math_commands
     assert _pad_math_commands(r"$\cdotp$") == r"$\cdotp$"
 
@@ -449,7 +449,7 @@ def test_pad_math_commands_leaves_trailing_subscript_alone():
 
 
 def test_pad_math_commands_leaves_unknown_macro_alone():
-    """写手自定义宏 \myVar 无法判断，保持原样避免误伤。"""
+    r"""写手自定义宏 \myVar 无法判断，保持原样避免误伤。"""
     from math_agent.nodes.latex import _pad_math_commands
     assert _pad_math_commands(r"$\myVar$") == r"$\myVar$"
 
@@ -457,7 +457,7 @@ def test_pad_math_commands_leaves_unknown_macro_alone():
 def test_pad_math_commands_skips_text_span():
     from math_agent.nodes.latex import _pad_math_commands
     # text 里的 \cdotdist 不动（外部 latex 自己处理，且 text 段通常已 escape）
-    assert _pad_math_commands("$\cdot$dist") == "$\cdot$dist"
+    assert _pad_math_commands(r"$\cdot$dist") == r"$\cdot$dist"
 
 
 def test_pad_math_commands_covers_equation_block():
@@ -472,7 +472,7 @@ def test_pad_math_commands_handles_multiple_in_one_span():
 
 
 def test_prepare_section_pipeline_defuses_cdot_dist():
-    """端到端：_prepare_section 应把 writer 常见的 `$\cdot$dist_{ij}$`
+    r"""端到端：_prepare_section 应把 writer 常见的 `$\cdot$dist_{ij}$`
     最终产出可编译 tex（\cdot 与 dist 之间不粘）。"""
     from math_agent.nodes.latex import _prepare_section
     src = r"目标函数含 $\cdot$dist_{ij}$ 项。"
