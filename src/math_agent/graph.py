@@ -5,9 +5,11 @@ from langgraph.graph import StateGraph, END
 
 from math_agent.state import MathModelingState
 from math_agent.nodes.analyst import analyst_node
+from math_agent.nodes.blueprint_critic import blueprint_critic_node
 from math_agent.nodes.modeler import modeler_node
 from math_agent.nodes.model_critic import model_critic_node
 from math_agent.nodes.coder import coder_node
+from math_agent.nodes.model_code_consistency import model_code_consistency_node
 from math_agent.nodes.sensitivity import sensitivity_node
 from math_agent.nodes.figure_pipeline import figure_pipeline_node
 from math_agent.nodes.writer import writer_node, writer_section_node
@@ -16,7 +18,10 @@ from math_agent.nodes.evaluation import evaluation_node
 from math_agent.nodes.human_review import human_review_node
 from math_agent.nodes.latex import latex_node
 from math_agent.nodes.table_assembler import table_assembler_node
-from math_agent.routing import after_model_critic, after_paper_critic, after_writer_step
+from math_agent.routing import (
+    after_blueprint_critic, after_model_critic, after_paper_critic,
+    after_writer_step, after_model_code_consistency,
+)
 
 
 def _advance_stage(state: MathModelingState) -> dict:
@@ -48,10 +53,12 @@ def build_graph(
 ):
     g = StateGraph(MathModelingState)
     g.add_node("analyst", _wrap(analyst_node, "analyst"))
+    g.add_node("blueprint_critic", _wrap(blueprint_critic_node, "blueprint_critic"))
     g.add_node("modeler", _wrap(modeler_node, "modeler"))
     g.add_node("model_critic", _wrap(model_critic_node, "model_critic"))
     g.add_node("advance_stage", _wrap(_advance_stage, "advance_stage"))
     g.add_node("coder", _wrap(coder_node, "coder"))
+    g.add_node("model_code_consistency", _wrap(model_code_consistency_node, "model_code_consistency"))
     g.add_node("sensitivity", _wrap(sensitivity_node, "sensitivity"))
     g.add_node("figure_pipeline", _wrap(figure_pipeline_node, "figure_pipeline"))
     g.add_node("writer", _wrap(writer_node, "writer"))
@@ -63,7 +70,13 @@ def build_graph(
     g.add_node("table_assembler", _wrap(table_assembler_node, "table_assembler"))
 
     g.set_entry_point("analyst")
-    g.add_edge("analyst", "modeler")
+    # analyst -> blueprint_critic -> (retry analyst / advance / advance_with_warning) -> modeler
+    g.add_edge("analyst", "blueprint_critic")
+    g.add_conditional_edges(
+        "blueprint_critic",
+        after_blueprint_critic,
+        {"retry": "analyst", "advance": "modeler", "advance_with_warning": "modeler"},
+    )
     g.add_edge("modeler", "model_critic")
     g.add_conditional_edges(
         "model_critic",
@@ -71,7 +84,13 @@ def build_graph(
         {"retry": "modeler", "advance": "advance_stage", "to_coder": "coder"},
     )
     g.add_edge("advance_stage", "modeler")
-    g.add_edge("coder", "sensitivity")
+    # coder -> model_code_consistency -> (retry coder / advance / advance_with_warning) -> sensitivity
+    g.add_edge("coder", "model_code_consistency")
+    g.add_conditional_edges(
+        "model_code_consistency",
+        after_model_code_consistency,
+        {"retry_coder": "coder", "advance": "sensitivity", "advance_with_warning": "sensitivity"},
+    )
     g.add_edge("sensitivity", "figure_pipeline")
     g.add_edge("figure_pipeline", "writer")
     # writer prep → section 循环 → paper_critic。每次 section 完成 = 一个 checkpoint。

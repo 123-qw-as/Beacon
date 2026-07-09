@@ -3,8 +3,22 @@
 final 阶段：1 base + 6 derivation + 1 consistency = 8 次 complete。
 basic / improved：不跑推导。
 """
-from math_agent.state import MathModelingState, Assumption, ModelVersion, DerivationStep
+from math_agent.state import MathModelingState, Assumption, ModelVersion, DerivationStep, ProblemBlueprint
 from math_agent.nodes.modeler import modeler_node
+
+
+def _state_final():
+    s = MathModelingState(problem="p", stage_target="final")
+    s.problem_blueprint = ProblemBlueprint(core_task="test")
+    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    return s
+
+
+def _state_stage(stage):
+    s = MathModelingState(problem="p", stage_target=stage)
+    s.problem_blueprint = ProblemBlueprint(core_task="test")
+    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    return s
 
 
 def test_modeler_final_stage_runs_derivation_chain(mocker):
@@ -17,8 +31,7 @@ def test_modeler_final_stage_runs_derivation_chain(mocker):
     # side_effect returns in order.
     mocker.patch("math_agent.nodes.modeler.complete",
                  side_effect=[base_model] + fake_steps + [fake_consistency])
-    s = MathModelingState(problem="p", stage_target="final")
-    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    s = _state_final()
     delta = modeler_node(s)
     model = delta["model_versions"][0]
     assert len(model.derivation_steps) == 6
@@ -29,8 +42,7 @@ def test_modeler_basic_stage_skips_derivation(mocker):
     """basic stage: only 1 complete call, no derivation."""
     mocker.patch("math_agent.nodes.modeler.complete",
                  return_value=ModelVersion(stage="basic", description="d" * 200))
-    s = MathModelingState(problem="p", stage_target="basic")
-    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    s = _state_stage("basic")
     delta = modeler_node(s)
     model = delta["model_versions"][0]
     assert model.derivation_steps == []
@@ -44,8 +56,7 @@ def test_modeler_inconsistent_derivation_records_notes(mocker):
     fake_consistency = type("C", (), {"coherent": False, "issues": ["step3 与 step1 矛盾"]})()
     mocker.patch("math_agent.nodes.modeler.complete",
                  side_effect=[base_model] + fake_steps + [fake_consistency])
-    s = MathModelingState(problem="p", stage_target="final")
-    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    s = _state_final()
     delta = modeler_node(s)
     model = delta["model_versions"][0]
     assert "step3" in model.derivation_notes or "矛盾" in model.derivation_notes
@@ -59,8 +70,7 @@ def test_modeler_derivation_feeds_completed_steps(mocker):
     fake_consistency = type("C", (), {"coherent": True, "issues": []})()
     spy = mocker.patch("math_agent.nodes.modeler.complete",
                        side_effect=[base_model] + fake_steps + [fake_consistency])
-    s = MathModelingState(problem="p", stage_target="final")
-    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    s = _state_final()
     modeler_node(s)
     # The 3rd derivation call (index 3 in spy, since 0=base, 1=step1, 2=step2, 3=step3)
     # should contain step1 and step2's results in its prompt
@@ -77,8 +87,7 @@ def test_modeler_final_consistent_derivation_notes_empty(mocker):
     fake_consistency = type("C", (), {"coherent": True, "issues": []})()
     mocker.patch("math_agent.nodes.modeler.complete",
                  side_effect=[base_model] + fake_steps + [fake_consistency])
-    s = MathModelingState(problem="p", stage_target="final")
-    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    s = _state_final()
     delta = modeler_node(s)
     model = delta["model_versions"][0]
     assert model.derivation_notes == ""
@@ -88,8 +97,7 @@ def test_modeler_improved_stage_skips_derivation(mocker):
     """improved stage: only 1 complete call, no derivation."""
     mocker.patch("math_agent.nodes.modeler.complete",
                  return_value=ModelVersion(stage="improved", description="d" * 200))
-    s = MathModelingState(problem="p", stage_target="improved")
-    s.assumptions.append(Assumption(statement="a", rationale="r"))
+    s = _state_stage("improved")
     delta = modeler_node(s)
     model = delta["model_versions"][0]
     assert model.derivation_steps == []

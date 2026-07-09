@@ -1,5 +1,8 @@
-from math_agent.state import MathModelingState, ModelVersion, CriticReport, CriticIssue
-from math_agent.routing import after_model_critic, after_paper_critic
+from math_agent.state import MathModelingState, ModelVersion, CriticReport, CriticIssue, ModelCodeConsistencyReport
+from math_agent.routing import (
+    after_model_critic, after_paper_critic,
+    after_blueprint_critic, after_model_code_consistency,
+)
 
 
 def _state_with(stage, score, iteration):
@@ -57,3 +60,73 @@ def test_after_paper_critic_advances_when_iter_cap_hit():
 def test_after_paper_critic_advances_when_no_critic():
     s = MathModelingState(problem="p")
     assert after_paper_critic(s) == "advance"
+
+
+# ---------------------------------------------------------------------------
+# after_blueprint_critic
+# ---------------------------------------------------------------------------
+
+def _state_with_blueprint_critic(approved: bool, iteration: int):
+    s = MathModelingState(problem="p", blueprint_iteration=iteration)
+    s.critic_reports.append(CriticReport(
+        target="analyst", score=9 if approved else 4, approved=approved,
+    ))
+    return s
+
+
+def test_blueprint_critic_advances_when_approved():
+    s = _state_with_blueprint_critic(approved=True, iteration=1)
+    assert after_blueprint_critic(s) == "advance"
+
+
+def test_blueprint_critic_retries_when_not_approved_and_under_cap():
+    s = _state_with_blueprint_critic(approved=False, iteration=1)
+    assert after_blueprint_critic(s) == "retry"
+
+
+def test_blueprint_critic_advances_with_warning_at_cap():
+    from math_agent.config import MAX_BLUEPRINT_ITERATIONS
+    s = _state_with_blueprint_critic(approved=False, iteration=MAX_BLUEPRINT_ITERATIONS)
+    assert after_blueprint_critic(s) == "advance_with_warning"
+
+
+def test_blueprint_critic_retries_when_no_report():
+    s = MathModelingState(problem="p", blueprint_iteration=0)
+    assert after_blueprint_critic(s) == "retry"
+
+
+# ---------------------------------------------------------------------------
+# after_model_code_consistency
+# ---------------------------------------------------------------------------
+
+def _state_with_consistency_report(approved: bool, score: int, iteration: int):
+    s = MathModelingState(problem="p", code_verify_iteration=iteration)
+    s.model_code_reports.append(ModelCodeConsistencyReport(score=score, approved=approved))
+    return s
+
+
+def test_consistency_advances_when_approved_and_high_score():
+    s = _state_with_consistency_report(approved=True, score=8, iteration=1)
+    assert after_model_code_consistency(s) == "advance"
+
+
+def test_consistency_retries_coder_when_not_approved():
+    s = _state_with_consistency_report(approved=False, score=4, iteration=1)
+    assert after_model_code_consistency(s) == "retry_coder"
+
+
+def test_consistency_retries_when_approved_but_low_score():
+    """approved=True 但 score < 7 仍不 advance。"""
+    s = _state_with_consistency_report(approved=True, score=5, iteration=1)
+    assert after_model_code_consistency(s) == "retry_coder"
+
+
+def test_consistency_advances_with_warning_at_cap():
+    from math_agent.config import MAX_CODE_VERIFY_ITERATIONS
+    s = _state_with_consistency_report(approved=False, score=4, iteration=MAX_CODE_VERIFY_ITERATIONS)
+    assert after_model_code_consistency(s) == "advance_with_warning"
+
+
+def test_consistency_retries_coder_when_no_reports():
+    s = MathModelingState(problem="p", code_verify_iteration=0)
+    assert after_model_code_consistency(s) == "retry_coder"

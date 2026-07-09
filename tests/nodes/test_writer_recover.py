@@ -12,6 +12,7 @@ from math_agent.prompts.writer_section import (
 from math_agent.state import (
     Assumption, ModelVersion, CodeArtifact, CriticReport,
     EvaluationReport, FigureArtifact, HumanDecision, SensitivityRun,
+    ProblemBlueprint, ModelCodeConsistencyReport,
 )
 from math_agent.nodes.analyst import AnalystOutput
 from math_agent.nodes.coder import CoderDraft
@@ -37,8 +38,15 @@ _PAYLOADS = {
 def _setup_upstream_mocks(mocker, workdir):
     """mock writer 之前的所有节点，让流程能跑到 writer。"""
     mocker.patch("math_agent.nodes.analyst.complete",
-                 return_value=AnalystOutput(assumptions=[
-                     Assumption(statement="A", rationale="r", sensitivity_relevant=True)]))
+                 return_value=ProblemBlueprint(
+                     core_task="test task",
+                     assumptions=[
+                         Assumption(statement="A", rationale="r", sensitivity_relevant=True)],
+                     problem_domains=["optimization"],
+                 ))
+    # blueprint_critic 审查通过
+    mocker.patch("math_agent.nodes.blueprint_critic.complete",
+                 return_value=CriticReport(target="analyst", score=9, approved=True))
     stage_iter = iter(["basic", "improved", "final"])
 
     def _modeler_complete(prompt, *, schema, **kw):
@@ -55,6 +63,9 @@ def _setup_upstream_mocks(mocker, workdir):
                  return_value=CriticReport(target="modeler", score=9, approved=True))
     mocker.patch("math_agent.nodes.coder.complete",
                  return_value=CoderDraft(purpose="主结果", code="print('coder done')"))
+    # model_code_consistency 审查通过
+    mocker.patch("math_agent.nodes.model_code_consistency.complete",
+                 return_value=ModelCodeConsistencyReport(score=9, approved=True))
     sens_plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [1,2,3,4,5], "metric": "y", "rationale": "r"}])
     sens_code = SensitivityCode(code=(
         "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"

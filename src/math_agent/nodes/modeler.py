@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 
 def modeler_node(state: MathModelingState) -> dict:
+    # 没有 blueprint 不进入自由建模
+    if state.problem_blueprint is None:
+        return {"errors": ["modeler: missing problem_blueprint"]}
+
     # 只关心针对**当前阶段**的上一版模型与上一份 critic，避免跨阶段污染。
     same_stage_prev = next(
         (m for m in reversed(state.model_versions) if m.stage == state.stage_target),
@@ -43,7 +47,7 @@ def modeler_node(state: MathModelingState) -> dict:
 
     prompt = build_prompt(
         state.problem, state.assumptions, prev_for_stage, state.stage_target,
-        critic_fb, retrieved_context=ctx,
+        critic_fb, retrieved_context=ctx, blueprint=state.problem_blueprint,
     )
     out: ModelVersion = complete(
         prompt, schema=ModelVersion, system=SYSTEM, model=MODEL_ROUTING["modeler"]

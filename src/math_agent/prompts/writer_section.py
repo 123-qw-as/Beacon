@@ -190,6 +190,7 @@ def build_outline_prompt(state: MathModelingState, *, retrieved_context: str = "
     rendered = tmpl.render(
         problem=state.problem,
         model_versions=state.model_versions,
+        problem_blueprint=state.problem_blueprint,
     )
     if retrieved_context:
         rendered = rendered + "\n\n" + retrieved_context
@@ -212,6 +213,7 @@ def build_section_prompt(
     """
     group = _group_by_name(group_name)
     # 标准视图 dict：与原 writer_prompt 一致的全量素材，由各模板按需取用。
+    latest_model = state.latest_model()
     view = {
         "problem": state.problem,
         "assumptions": state.assumptions,
@@ -223,6 +225,13 @@ def build_section_prompt(
         "problem_domains": state.problem_domains,  # Plan D：analyst 输出
         "references_list": references_list or [],  # Plan D：检索到的真实文献
         "available_numbers": _extract_available_numbers(state),  # 可引用的数值清单
+        # Problem Blueprint 对齐（P2 Step 13）
+        "problem_blueprint": state.problem_blueprint,
+        "question_coverage": latest_model.question_coverage if latest_model else [],
+        "objective_mapping": latest_model.objective_mapping if latest_model else [],
+        "constraint_mapping": latest_model.constraint_mapping if latest_model else [],
+        "validation_mapping": latest_model.validation_mapping if latest_model else [],
+        "model_code_reports": state.model_code_reports,
         # 大纲锚点：每章一个 outline_<field> 变量
         "outline_abstract": outline.abstract,
         "outline_problem_restatement": outline.problem_restatement,
@@ -236,6 +245,33 @@ def build_section_prompt(
     }
     tmpl = _env.get_template(group.template)
     rendered = tmpl.render(**view)
+    # 注入 Blueprint 写作约束（P2 Step 13）
+    if state.problem_blueprint is not None:
+        bp = state.problem_blueprint
+        constraints_lines = [
+            "\n---\n## Blueprint 写作约束",
+            f"- 核心任务：{bp.core_task}",
+        ]
+        if bp.subquestions:
+            sq = "; ".join(f"[{s.id}] {s.original_text}" for s in bp.subquestions)
+            constraints_lines.append(f"- 必须覆盖的小问：{sq}")
+            constraints_lines.append("- 如果某个小问没有被模型或代码支持，必须写成局限性，不能编造结果。")
+        if bp.decision_variables:
+            dv = ", ".join(v.name for v in bp.decision_variables)
+            constraints_lines.append(f"- 符号说明优先使用决策变量：{dv}")
+        if bp.objectives:
+            ob = "; ".join(o.description for o in bp.objectives)
+            constraints_lines.append(f"- 模型建立必须对应目标：{ob}")
+        if bp.constraints:
+            cs = "; ".join(c.description for c in bp.constraints)
+            constraints_lines.append(f"- 模型建立必须对应约束：{cs}")
+        if bp.metrics:
+            mt = ", ".join(m.name for m in bp.metrics)
+            constraints_lines.append(f"- 求解与结果必须对应指标：{mt}")
+        if bp.validation_plan:
+            vp = "; ".join(v.target for v in bp.validation_plan)
+            constraints_lines.append(f"- 求解与结果必须对应验证计划：{vp}")
+        rendered = rendered + "\n".join(constraints_lines)
     # 注入可用数值清单：让 writer 只能引用这些数值，不得编造
     numbers = view["available_numbers"]
     if numbers:

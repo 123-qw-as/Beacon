@@ -10,7 +10,8 @@ from PIL import Image
 from math_agent.graph import build_graph
 from math_agent.state import (
     Assumption, ModelVersion, CriticReport, PaperSections,
-    EvaluationReport, HumanDecision, DerivationStep,
+    EvaluationReport, HumanDecision, DerivationStep, ProblemBlueprint,
+    ModelCodeConsistencyReport,
 )
 from math_agent.nodes.analyst import AnalystOutput
 from math_agent.nodes.coder import CoderDraft
@@ -21,8 +22,16 @@ from math_agent.prompts.modeler_derivation import ConsistencyCheck
 
 def _setup_all_mocks(mocker, workdir):
     mocker.patch("math_agent.nodes.analyst.complete",
-                 return_value=AnalystOutput(assumptions=[
-                     Assumption(statement="A", rationale="r", sensitivity_relevant=True)]))
+                 return_value=ProblemBlueprint(
+                     core_task="test task",
+                     assumptions=[
+                         Assumption(statement="A", rationale="r", sensitivity_relevant=True)],
+                     problem_domains=["optimization"],
+                 ))
+
+    # blueprint_critic 审查通过
+    mocker.patch("math_agent.nodes.blueprint_critic.complete",
+                 return_value=CriticReport(target="analyst", score=9, approved=True))
 
     stage_iter = iter(["basic", "improved", "final"])
 
@@ -44,6 +53,10 @@ def _setup_all_mocks(mocker, workdir):
     # coder 仅输出 print（生成 png 由 sensitivity step 完成）
     mocker.patch("math_agent.nodes.coder.complete",
                  return_value=CoderDraft(purpose="主结果", code="print('coder done')"))
+
+    # model_code_consistency 审查通过
+    mocker.patch("math_agent.nodes.model_code_consistency.complete",
+                 return_value=ModelCodeConsistencyReport(score=9, approved=True))
 
     # sensitivity 三段
     sens_plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [1,2,3,4,5], "metric": "y", "rationale": "r"}])

@@ -9,7 +9,8 @@ def model_critic_node(state: MathModelingState) -> dict:
     if model is None:
         raise ValueError("ModelCritic: 当前 state 中没有 model_versions")
 
-    prompt = build_prompt(state.problem, state.assumptions, model)
+    prompt = build_prompt(state.problem, state.assumptions, model,
+                          blueprint=state.problem_blueprint)
     out: CriticReport = complete(
         prompt, schema=CriticReport, system=SYSTEM, model=MODEL_ROUTING["model_critic"]
     )

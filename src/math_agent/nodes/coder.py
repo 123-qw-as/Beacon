@@ -26,8 +26,12 @@ def coder_node(state: MathModelingState) -> dict:
     workdir.mkdir(parents=True, exist_ok=True)
 
     # Plan D Phase 3：按 modeler.figure_purposes 拆成 N 个单图调用；
-    # 旧 state 无 figure_purposes → 退化为单次调用（用 description 当 purpose），向后兼容。
+    # 旧 state 无 figure_purposes -> 退化为单次调用（用 description 当 purpose），向后兼容。
     purposes = model.figure_purposes or [model.description]
+
+    # batch 递增：每次 coder 运行产生新批次，一致性审查只看最新 batch
+    max_batch = max((a.batch for a in state.code_artifacts), default=0)
+    current_batch = max_batch + 1
 
     artifacts: list[CodeArtifact] = []
     for i, purpose in enumerate(purposes):
@@ -35,7 +39,8 @@ def coder_node(state: MathModelingState) -> dict:
         prev_kind: str = ""
         for attempt in range(MAX_CODE_RETRIES + 1):
             draft: CoderDraft = complete(
-                build_prompt_figure_one(model, purpose, prev_err, prev_kind),
+                build_prompt_figure_one(model, purpose, prev_err, prev_kind,
+                                        blueprint=state.problem_blueprint),
                 schema=CoderDraft,
                 system=SYSTEM,
                 model=MODEL_ROUTING["coder"],
@@ -49,6 +54,7 @@ def coder_node(state: MathModelingState) -> dict:
                     stderr=result.stderr,
                     success=result.success,
                     artifact_paths=result.artifact_paths,
+                    batch=current_batch,
                 )
             )
             if result.success:
@@ -82,6 +88,7 @@ def coder_node(state: MathModelingState) -> dict:
                         success=baseline_result.success,
                         artifact_paths=baseline_result.artifact_paths,
                         category=f"baseline:{category}",
+                        batch=current_batch,
                     )
                 )
             except Exception as e:
@@ -94,6 +101,7 @@ def coder_node(state: MathModelingState) -> dict:
                         stderr=str(e)[:500],
                         success=False,
                         category=f"baseline:{category}",
+                        batch=current_batch,
                     )
                 )
 

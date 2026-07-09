@@ -14,7 +14,7 @@ import pytest
 
 from math_agent.state import (
     Assumption, ModelVersion, CriticReport, PaperSections,
-    EvaluationReport, DerivationStep,
+    EvaluationReport, DerivationStep, ProblemBlueprint, ModelCodeConsistencyReport,
 )
 from math_agent.nodes.analyst import AnalystOutput
 from math_agent.nodes.coder import CoderDraft
@@ -30,7 +30,7 @@ _ALL_KEYWORDS = ["覆盖", "无人机", "鲁棒", "内涝", "排水", "风险"]
 def _make_paper(keywords: list[str]) -> PaperSections:
     """生成必含给定 keywords 的 paper（每段都含一遍）。"""
     kw_line = "、".join(keywords) if keywords else "（无）"
-    body = f"本研究围绕 {kw_line} 展开，模型经过 basic→improved→final 演化。" * 5
+    body = f"本研究围绕 {kw_line} 展开，模型经过 basic->improved->final 演化。" * 5
     return PaperSections(
         abstract=body, problem_restatement=body, assumptions=body,
         notation=body, model_section=body, solution=body,
@@ -44,8 +44,16 @@ def _setup_mocks(stack: ExitStack, *, paper: PaperSections,
         stack.enter_context(patch(target, **kw))
 
     _patch("math_agent.nodes.analyst.complete",
-           side_effect=itertools.cycle([AnalystOutput(assumptions=[
-               Assumption(statement="A", rationale="r", sensitivity_relevant=True)])]))
+           side_effect=itertools.cycle([ProblemBlueprint(
+               core_task="bench task",
+               assumptions=[
+                   Assumption(statement="A", rationale="r", sensitivity_relevant=True)],
+               problem_domains=["optimization"],
+           )]))
+
+    # blueprint_critic 审查通过
+    _patch("math_agent.nodes.blueprint_critic.complete",
+           side_effect=itertools.cycle([CriticReport(target="analyst", score=9, approved=True)]))
 
     def _modeler_complete(prompt, *, schema, **kw):
         # final 阶段会额外调用 derivation steps + consistency gate，
@@ -65,6 +73,10 @@ def _setup_mocks(stack: ExitStack, *, paper: PaperSections,
 
     _patch("math_agent.nodes.coder.complete",
            side_effect=itertools.cycle([CoderDraft(purpose="主结果", code="print('done')")]))
+
+    # model_code_consistency 审查通过
+    _patch("math_agent.nodes.model_code_consistency.complete",
+           side_effect=itertools.cycle([ModelCodeConsistencyReport(score=9, approved=True)]))
 
     sens_plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [1, 2, 3, 4, 5],
                                        "metric": "y", "rationale": "r"}])
