@@ -24,6 +24,94 @@ from math_agent.tracing import Tracer, get_last_node, set_current, reset_current
 app = typer.Typer(help="Math modeling multi-agent system.")
 
 
+def _dump_state_summary(out: Path, thread: str = "default") -> None:
+    """从 checkpoint 读 final state，写 state_summary.json 供 Web UI 消费。
+
+    ponytail: 直接从 checkpoint 读，不侵入 graph 节点。无 checkpoint 时静默跳过。
+    """
+    chk = out / "checkpoints.sqlite"
+    if not chk.exists():
+        return
+    try:
+        with _saver_cm(out) as saver:
+            g = build_graph(checkpointer=saver)
+            snap = g.get_state(_config(thread))
+    except Exception:
+        return
+    if snap is None or snap.values is None:
+        return
+
+    state = snap.values
+
+    def _get(key, default=None):
+        if isinstance(state, dict):
+            return state.get(key, default)
+        return getattr(state, key, default)
+
+    bp = _get("problem_blueprint")
+    critics = _get("critic_reports") or []
+    mc_reports = _get("model_code_reports") or []
+    models = _get("model_versions") or []
+
+    # blueprint critic
+    bp_critic = next(
+        (r for r in reversed(critics) if getattr(r, "target", "") == "analyst"), None)
+    # model critic (latest)
+    model_critic = next(
+        (r for r in reversed(critics) if getattr(r, "target", "") == "modeler"), None)
+    # paper critic (latest)
+    paper_critic = next(
+        (r for r in reversed(critics) if getattr(r, "target", "") == "paper"), None)
+
+    # question coverage
+    total_sq = len(getattr(bp, "subquestions", []) or []) if bp else 0
+    covered = len(getattr(models[-1], "question_coverage", []) or []) if models else 0
+
+    # unresolved issues
+    unresolved = 0
+    for r in critics:
+        if not getattr(r, "approved", True):
+            unresolved += len(getattr(r, "issues", []) or [])
+    for r in mc_reports:
+        if not getattr(r, "approved", True):
+            unresolved += len(getattr(r, "issues", []) or [])
+
+    summary = {
+        "problem_blueprint": bp.model_dump() if bp else None,
+        "blueprint_critic": {
+            "score": getattr(bp_critic, "score", None),
+            "approved": getattr(bp_critic, "approved", None),
+            "issues": [getattr(i, "problem", str(i)) for i in getattr(bp_critic, "issues", []) or []]
+                       if bp_critic else [],
+            "suggestions": getattr(bp_critic, "suggestions", []) or [] if bp_critic else [],
+        } if bp_critic else None,
+        "model_critic": {
+            "score": getattr(model_critic, "score", None),
+            "approved": getattr(model_critic, "approved", None),
+        } if model_critic else None,
+        "paper_critic": {
+            "score": getattr(paper_critic, "score", None),
+            "approved": getattr(paper_critic, "approved", None),
+        } if paper_critic else None,
+        "model_code_consistency": {
+            "score": getattr(mc_reports[-1], "score", None) if mc_reports else None,
+            "approved": getattr(mc_reports[-1], "approved", None) if mc_reports else None,
+            "missing_variables": getattr(mc_reports[-1], "missing_variables", []) or [] if mc_reports else [],
+            "missing_objectives": getattr(mc_reports[-1], "missing_objectives", []) or [] if mc_reports else [],
+            "missing_constraints": getattr(mc_reports[-1], "missing_constraints", []) or [] if mc_reports else [],
+            "issues": getattr(mc_reports[-1], "issues", []) or [] if mc_reports else [],
+        } if mc_reports else None,
+        "question_coverage": f"{covered}/{total_sq}",
+        "unresolved_issues": unresolved,
+        "stage_target": _get("stage_target"),
+        "iteration": _get("iteration"),
+    }
+    (out / "state_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+
 def _saver_cm(out: Path):
     """返回 SqliteSaver 的 contextmanager；调用方需用 with 包起来。"""
     out.mkdir(parents=True, exist_ok=True)
@@ -101,6 +189,7 @@ def run(
     finally:
         tracer.flush()
         reset_current(tok)
+    _dump_state_summary(out, thread)
     if interrupt:
         typer.echo(f"pipeline paused before human_review (thread={thread}); trace at {out / 'trace.json'}")
         typer.echo(f"use `math-agent resume --out {out} --thread {thread} --approve` to continue.")
@@ -126,6 +215,7 @@ def resume(
     finally:
         tracer.flush()
         reset_current(tok)
+    _dump_state_summary(out, thread)
     typer.echo(f"done. tex/md written to {out}")
 
 
@@ -149,6 +239,7 @@ def recover(
     finally:
         tracer.flush()
         reset_current(tok)
+    _dump_state_summary(out, thread)
     typer.echo(f"recovered. trace at {out / 'trace.json'}")
 
 

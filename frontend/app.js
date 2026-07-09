@@ -30,7 +30,7 @@ const templateButtons = document.querySelectorAll("[data-template]");
 const templateHint = document.querySelector("#templateHint");
 const pipelineItems = [...document.querySelectorAll("#pipelineList li")];
 
-const stages = ["Analyst", "Modeler", "Model Critic", "Coder", "Sensitivity", "Figure Pipeline", "Writer", "Paper Critic", "Evaluation", "LaTeX"];
+const stages = ["Analyst", "Blueprint Critic", "Modeler", "Model Critic", "Coder", "Code Consistency", "Sensitivity", "Figure Pipeline", "Writer", "Paper Critic", "Evaluation", "LaTeX"];
 const templateHints = {
   default: "适配建模论文、代码、敏感性分析与 LaTeX 编译流程。",
   gmcm: "启用国赛论文封面字段，命令会追加 --template gmcm。",
@@ -120,6 +120,103 @@ async function loadFixturesIntoProblem() {
   showToast(`已导入 ${fixture.name}`);
 }
 
+function renderBlueprint(summary) {
+  if (!summary) {
+    setPreview("Problem Blueprint", "还没有 Blueprint 数据。先运行流水线，完成后在此查看结构化题目理解。");
+    return;
+  }
+  const bp = summary.problem_blueprint;
+  const esc = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+  let html = '<div class="blueprint-view">';
+
+  // scores row
+  const bc = summary.blueprint_critic;
+  const mc = summary.model_code_consistency;
+  html += '<div class="bp-scores">';
+  if (bc) {
+    html += `<div class="bp-score-card ${bc.approved ? "pass" : "fail"}"><span>Blueprint</span><strong>${bc.score ?? "?"}/10</strong><small>${bc.approved ? "通过" : "未通过"}</small></div>`;
+  }
+  if (summary.model_critic) {
+    html += `<div class="bp-score-card ${summary.model_critic.approved ? "pass" : "fail"}"><span>Model</span><strong>${summary.model_critic.score ?? "?"}/10</strong><small>${summary.model_critic.approved ? "通过" : "未通过"}</small></div>`;
+  }
+  if (mc) {
+    html += `<div class="bp-score-card ${mc.approved ? "pass" : "fail"}"><span>Code</span><strong>${mc.score ?? "?"}/10</strong><small>${mc.approved ? "通过" : "未通过"}</small></div>`;
+  }
+  if (summary.paper_critic) {
+    html += `<div class="bp-score-card ${summary.paper_critic.approved ? "pass" : "fail"}"><span>Paper</span><strong>${summary.paper_critic.score ?? "?"}/10</strong><small>${summary.paper_critic.approved ? "通过" : "未通过"}</small></div>`;
+  }
+  html += "</div>";
+
+  // coverage + unresolved
+  html += '<div class="bp-meta">';
+  html += `<span class="bp-tag">Question Coverage: ${esc(summary.question_coverage)}</span>`;
+  html += `<span class="bp-tag ${summary.unresolved_issues > 0 ? "warn" : "ok"}">Unresolved Issues: ${summary.unresolved_issues}</span>`;
+  html += "</div>";
+
+  // blueprint details
+  if (bp) {
+    html += `<h4>核心任务</h4><p>${esc(bp.core_task)}</p>`;
+    if (bp.subquestions && bp.subquestions.length) {
+      html += "<h4>小问</h4><ul class=\"bp-list\">";
+      bp.subquestions.forEach((sq) => {
+        html += `<li><strong>[${esc(sq.id)}]</strong> ${esc(sq.original_text)} <em>(${esc(sq.task_type)})</em></li>`;
+      });
+      html += "</ul>";
+    }
+    if (bp.decision_variables && bp.decision_variables.length) {
+      html += "<h4>决策变量</h4><ul class=\"bp-list\">";
+      bp.decision_variables.forEach((v) => {
+        html += `<li><code>${esc(v.name)}</code> ${esc(v.meaning)}</li>`;
+      });
+      html += "</ul>";
+    }
+    if (bp.objectives && bp.objectives.length) {
+      html += "<h4>目标</h4><ul class=\"bp-list\">";
+      bp.objectives.forEach((o) => {
+        html += `<li>[${esc(o.direction)}] ${esc(o.description)}</li>`;
+      });
+      html += "</ul>";
+    }
+    if (bp.constraints && bp.constraints.length) {
+      html += "<h4>约束</h4><ul class=\"bp-list\">";
+      bp.constraints.forEach((c) => {
+        html += `<li>${esc(c.description)} <em>(${esc(c.source)})</em></li>`;
+      });
+      html += "</ul>";
+    }
+    if (bp.metrics && bp.metrics.length) {
+      html += "<h4>指标</h4><ul class=\"bp-list\">";
+      bp.metrics.forEach((m) => {
+        html += `<li><code>${esc(m.name)}</code> ${esc(m.meaning)}</li>`;
+      });
+      html += "</ul>";
+    }
+  }
+
+  // consistency details
+  if (mc && (mc.missing_variables?.length || mc.missing_objectives?.length || mc.missing_constraints?.length || mc.issues?.length)) {
+    html += "<h4>模型-代码一致性</h4>";
+    if (mc.missing_variables?.length) html += `<p class="bp-warn">缺失变量: ${esc(mc.missing_variables.join(", "))}</p>`;
+    if (mc.missing_objectives?.length) html += `<p class="bp-warn">缺失目标: ${esc(mc.missing_objectives.join(", "))}</p>`;
+    if (mc.missing_constraints?.length) html += `<p class="bp-warn">缺失约束: ${esc(mc.missing_constraints.join(", "))}</p>`;
+    if (mc.issues?.length) {
+      html += "<ul class=\"bp-list\">";
+      mc.issues.forEach((i) => { html += `<li>${esc(i)}</li>`; });
+      html += "</ul>";
+    }
+  }
+
+  // blueprint critic issues
+  if (bc && bc.issues?.length) {
+    html += "<h4>Blueprint Critic 意见</h4><ul class=\"bp-list\">";
+    bc.issues.forEach((i) => { html += `<li>${esc(i)}</li>`; });
+    html += "</ul>";
+  }
+
+  html += "</div>";
+  artifactPreview.innerHTML = html;
+}
+
 async function loadArtifacts(tab = "paper") {
   const payload = await api(`/api/artifacts?out=${encodeURIComponent(outputDir.value || "runs/ui-latest")}`);
   lastArtifacts = payload;
@@ -128,6 +225,8 @@ async function loadArtifacts(tab = "paper") {
       payload.paperExcerpt ? "论文预览" : "还没有论文产物",
       payload.paperExcerpt ? payload.paperExcerpt.slice(0, 700) : `未在 ${payload.out} 找到 paper.md。先启动流水线，或检查输出目录。`,
     );
+  } else if (tab === "blueprint") {
+    renderBlueprint(payload.stateSummary);
   } else if (tab === "trace") {
     setPreview(
       payload.traceSummary ? "Trace 摘要" : "还没有 Trace",

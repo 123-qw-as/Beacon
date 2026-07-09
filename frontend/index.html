@@ -116,10 +116,12 @@
             </div>
 
             <ol class="pipeline-list" id="pipelineList">
-              <li class="done"><span>Analyst</span><small>题意拆解与约束识别</small></li>
+              <li class="done"><span>Analyst</span><small>题意拆解与 Problem Blueprint</small></li>
+              <li class="done"><span>Blueprint Critic</span><small>审查题目理解完整性</small></li>
               <li class="done"><span>Modeler</span><small>建立基础与改进模型</small></li>
               <li class="done"><span>Model Critic</span><small>检查假设与推导漏洞</small></li>
               <li class="done"><span>Coder</span><small>生成可运行实验代码</small></li>
+              <li class="done"><span>Code Consistency</span><small>模型-代码一致性审查</small></li>
               <li class="done"><span>Sensitivity</span><small>参数扫描与鲁棒性分析</small></li>
               <li class="done"><span>Figure Pipeline</span><small>图表渲染与质量评审</small></li>
               <li class="active"><span>Writer</span><small>分章节生成论文草稿</small></li>
@@ -170,6 +172,7 @@
 
             <div class="tabs" role="tablist" aria-label="产物类型">
               <button class="active" type="button" data-tab="paper">论文</button>
+              <button type="button" data-tab="blueprint">Blueprint</button>
               <button type="button" data-tab="figures">图表</button>
               <button type="button" data-tab="trace">Trace</button>
             </div>

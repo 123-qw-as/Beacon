@@ -741,3 +741,118 @@ h3 {
   line-height: 1.55;
   white-space: pre-wrap;
 }
+
+/* ---- P3: Blueprint & Consistency 面板 ---- */
+
+.blueprint-view h4 {
+  margin: 18px 0 8px;
+  font-size: 0.92rem;
+  color: var(--blue);
+}
+
+.blueprint-view p {
+  margin: 0 0 6px;
+  color: var(--ink-soft);
+  line-height: 1.6;
+}
+
+.bp-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.bp-score-card {
+  display: grid;
+  gap: 2px;
+  min-width: 90px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+  text-align: center;
+}
+
+.bp-score-card span {
+  font-size: 0.76rem;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.bp-score-card strong {
+  font-size: 1.3rem;
+}
+
+.bp-score-card small {
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.bp-score-card.pass {
+  border-color: var(--green);
+}
+
+.bp-score-card.pass small {
+  color: var(--green);
+}
+
+.bp-score-card.fail {
+  border-color: var(--rose);
+}
+
+.bp-score-card.fail small {
+  color: var(--rose);
+}
+
+.bp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.bp-tag {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: #f0f4f8;
+  color: var(--ink-soft);
+}
+
+.bp-tag.warn {
+  background: #fff0f3;
+  color: var(--rose);
+}
+
+.bp-tag.ok {
+  background: #dff6eb;
+  color: var(--green);
+}
+
+.bp-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: var(--ink-soft);
+  line-height: 1.7;
+}
+
+.bp-list code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f0f4f8;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.84rem;
+}
+
+.bp-warn {
+  color: var(--rose) !important;
+  font-size: 0.86rem;
+}
+
+@media (max-width: 860px) {
+  .bp-scores {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

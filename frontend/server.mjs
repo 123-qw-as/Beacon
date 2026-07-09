@@ -92,11 +92,15 @@ async function handleApi(request, response, url) {
     const files = await listDirectoryFiles(outDir);
     let paper = "";
     let trace = null;
+    let stateSummary = null;
     try {
       paper = await readFile(resolve(outDir, "paper.md"), "utf8");
     } catch {}
     try {
       trace = JSON.parse(await readFile(resolve(outDir, "trace.json"), "utf8"));
+    } catch {}
+    try {
+      stateSummary = JSON.parse(await readFile(resolve(outDir, "state_summary.json"), "utf8"));
     } catch {}
     sendJson(response, 200, {
       out,
@@ -111,6 +115,7 @@ async function handleApi(request, response, url) {
             nodes: Array.isArray(trace.nodes) ? trace.nodes.length : 0,
           }
         : null,
+      stateSummary,
     });
     return;
   }
