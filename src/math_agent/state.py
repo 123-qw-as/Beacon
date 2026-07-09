@@ -134,7 +134,7 @@ class PaperSections(BaseModel):
 
 class MathModelingState(BaseModel):
     # 输入
-    problem: str
+    problem: str = ""  # 防御性默认值：checkpoint 重建容错（S2 bug，见 P2 评级）
     background: str = ""
     questions: list[str] = Field(default_factory=list)
 

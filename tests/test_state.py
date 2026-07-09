@@ -153,3 +153,17 @@ def test_code_artifact_has_category_field():
     assert a.category == "figure"  # 默认值
     b = CodeArtifact(purpose="baseline", code="print(2)", category="baseline:no_schedule")
     assert b.category == "baseline:no_schedule"
+
+
+def test_state_constructible_without_problem():
+    """回归：checkpoint 重建时 state 可能缺少 problem，不应抛 ValidationError (S2 bug)。"""
+    s = MathModelingState()
+    assert s.problem == ""
+    assert s.assumptions == []
+    assert s.iteration == 0
+
+
+def test_state_with_problem_still_works():
+    """problem 显式传入应正常保留值。"""
+    s = MathModelingState(problem="共享单车调度问题")
+    assert s.problem == "共享单车调度问题"
