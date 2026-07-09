@@ -23,6 +23,8 @@ class BenchCase:
     overall: float
     passed: bool
     failures: list[str] = field(default_factory=list)
+    # P2 §6.2: 质量四维度评分（可选，quality_eval 产出）
+    quality: dict | None = None
 
 
 @dataclass
@@ -213,7 +215,17 @@ def run_bench(*, out_dir: str | Path) -> BenchReport:
             "output_dir": str(case_out),
             "human_decision": HumanDecision(approved=True).model_dump(),
         })
-        cases.append(_evaluate(case_id, final, expect, output_dir=case_out))
+        case = _evaluate(case_id, final, expect, output_dir=case_out)
+
+        # P2 §6.2: 质量四维度评分
+        try:
+            from math_agent.bench.quality_eval import evaluate_quality
+            q = evaluate_quality(final, case_id)
+            case.quality = asdict(q)
+        except Exception:
+            pass  # rubric 缺失等 -> 跳过质量评分，不影响回归判定
+
+        cases.append(case)
 
     report = BenchReport(cases=cases)
     (out_dir / "bench_report.json").write_text(

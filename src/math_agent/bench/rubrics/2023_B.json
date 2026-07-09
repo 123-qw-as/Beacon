@@ -1,0 +1,32 @@
+{
+  "problem_id": "2023_B",
+  "blueprint": {
+    "min_subquestions": 2,
+    "must_have_objectives": true,
+    "must_have_constraints": true,
+    "must_have_metrics": true,
+    "must_have_recommended_route": true,
+    "must_have_validation_plan": true
+  },
+  "model": {
+    "must_have_question_coverage": true,
+    "must_have_derivation_steps": 4,
+    "must_have_baseline": true
+  },
+  "code": {
+    "min_success_artifacts": 1,
+    "must_have_result_lines": true,
+    "must_have_consistency_approved": true
+  },
+  "paper": {
+    "must_contain_keywords": ["内涝", "排水", "风险"],
+    "min_overall": 6.5
+  },
+  "thresholds": {
+    "min_blueprint": 7,
+    "min_model": 7,
+    "min_code": 7,
+    "min_paper": 7,
+    "min_overall": 7.2
+  }
+}
