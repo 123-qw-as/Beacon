@@ -55,7 +55,8 @@ def _read_state_summary_data(out: Path, thread: str = "default") -> dict | None:
     models = _get("model_versions") or []
 
     bp_critic = next(
-        (r for r in reversed(critics) if getattr(r, "target", "") == "analyst"), None)
+        (r for r in reversed(critics)
+         if getattr(r, "target", "") == "analyst" and getattr(r, "critic_type", "") == "blueprint"), None)
     model_critic = next(
         (r for r in reversed(critics) if getattr(r, "target", "") == "modeler"), None)
     paper_critic = next(
