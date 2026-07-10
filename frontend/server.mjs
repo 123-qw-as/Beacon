@@ -101,7 +101,11 @@ async function _spawnResume(run, approve, notes) {
 
   const child = spawn(command, args, {
     cwd: projectRoot,
-    env: { ...env, UV_CACHE_DIR: env.UV_CACHE_DIR || resolve(projectRoot, ".uv-cache") },
+    env: {
+      ...env,
+      MATH_AGENT_RAG_ENABLED: run.ragEnabled === false ? "0" : "1",
+      UV_CACHE_DIR: env.UV_CACHE_DIR || resolve(projectRoot, ".uv-cache"),
+    },
     windowsHide: true,
   });
 
@@ -313,6 +317,7 @@ async function handleApi(request, response, url) {
       command: `${command} ${args.join(" ")}`,
       out,
       threadId: body.threadId || "default",
+      ragEnabled: body.ragEnabled !== false,
       logPath,
       startedAt: new Date().toISOString(),
       endedAt: null,

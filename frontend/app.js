@@ -267,6 +267,7 @@ async function startProjectRun() {
   currentRunId = run.id;
   showToast("已启动项目流水线");
   startLogStream(currentRunId);
+  // 慢速状态轮询：SSE 活跃时仅检测 paused/终态（不写日志），SSE 断开时作为日志 fallback
   pollTimer = window.setTimeout(pollCurrentRun, 2000);
 }
 
@@ -275,15 +276,19 @@ async function pollCurrentRun() {
   window.clearTimeout(pollTimer);
   try {
     const run = await api(`/api/runs/${encodeURIComponent(currentRunId)}`);
-    if (run.status === "running" || run.status === "paused") {
-      setRunLogPreview(run);
-      // 开始 SSE 日志流（如果还没开始）
-      if (!logStream) startLogStream(currentRunId);
-      if (run.status === "paused") {
-        handlePaused(run);
-      } else {
+    if (run.status === "running") {
+      if (!logStream) {
+        // SSE 未连接 -> 用 API 轮询作为日志 fallback
+        setRunLogPreview(run);
         pollTimer = window.setTimeout(pollCurrentRun, 3000);
+      } else {
+        // SSE 活跃 -> 不写日志，只做慢速状态探测（SSE 断开时的 safety net）
+        pollTimer = window.setTimeout(pollCurrentRun, 5000);
       }
+      return;
+    }
+    if (run.status === "paused") {
+      handlePaused(run);
       return;
     }
     handleRunEnd(run);
