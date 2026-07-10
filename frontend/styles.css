@@ -856,3 +856,21 @@ h3 {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ---- HITL resume bar ---- */
+
+.resume-bar {
+  display: flex;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.pipeline-list li.paused {
+  border-color: var(--blue);
+  background: #f0f6ff;
+}
+
+.pipeline-list li.paused::before {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 5px rgba(21, 94, 150, 0.15);
+}

@@ -2,7 +2,8 @@ import "dotenv/config";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile, open } from "node:fs/promises";
+import { watch } from "node:fs";
 import { extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -69,6 +70,70 @@ async function listDirectoryFiles(dirPath) {
   }
 }
 
+function _notifySseClients(run) {
+  if (!run.sseClients || run.sseClients.size === 0) return;
+  const msg = `event: status\ndata: ${JSON.stringify({ status: run.status, exitCode: run.exitCode })}\n\n`;
+  for (const res of run.sseClients) {
+    try { res.write(msg); res.end(); } catch {}
+  }
+  run.sseClients.clear();
+}
+
+async function _spawnResume(run, approve, notes) {
+  const commandParts = (env.MATH_AGENT_COMMAND || "uv run math-agent").split(/\s+/).filter(Boolean);
+  const command = commandParts[0];
+  const args = [...commandParts.slice(1), "resume",
+    "--out", run.out, "--thread", run.threadId];
+  if (approve) { args.push("--approve"); } else { args.push("--no-approve"); }
+  if (notes) { args.push("--notes", notes); }
+
+  const runDir = safeProjectPath(`runs/ui-server/${run.id}`);
+  const logPath = resolve(runDir, "resume.log");
+  const logStream = createWriteStream(logPath, { flags: "a" });
+  logStream.write(`$ ${command} ${args.join(" ")}\n\n`);
+
+  // 重置 run 状态为 running
+  run.status = "running";
+  run.endedAt = null;
+  run.exitCode = null;
+  run.stdoutBuffer = "";
+  run.sseClients = run.sseClients || new Set();
+
+  const child = spawn(command, args, {
+    cwd: projectRoot,
+    env: { ...env, UV_CACHE_DIR: env.UV_CACHE_DIR || resolve(projectRoot, ".uv-cache") },
+    windowsHide: true,
+  });
+
+  run.child = child;
+  run.pid = child.pid;
+  run.logPath = logPath;
+  child.stdout.on("data", (chunk) => {
+    run.stdoutBuffer = (run.stdoutBuffer + chunk.toString()).slice(-8192);
+  });
+  child.stdout.pipe(logStream);
+  child.stderr.pipe(logStream);
+  child.on("error", (error) => {
+    run.status = "failed";
+    run.endedAt = new Date().toISOString();
+    logStream.write(`\n[spawn error] ${error.message}\n`);
+    logStream.end();
+    _notifySseClients(run);
+  });
+  child.on("close", (code) => {
+    if (code === 0 && run.stdoutBuffer.includes("pipeline paused before human_review")) {
+      run.status = "paused";
+    } else {
+      run.status = code === 0 ? "completed" : "failed";
+    }
+    run.exitCode = code;
+    run.endedAt = new Date().toISOString();
+    logStream.write(`\n[exit ${code}] [status ${run.status}]\n`);
+    logStream.end();
+    _notifySseClients(run);
+  });
+}
+
 async function handleApi(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/health") {
     const fixtures = await listFixtures().catch(() => []);
@@ -132,8 +197,63 @@ async function handleApi(request, response, url) {
       run.status = "stopped";
       run.endedAt = new Date().toISOString();
     }
-    const { child, ...safeRun } = run;
+    const { child, sseClients, stdoutBuffer, ...safeRun } = run;
     sendJson(response, 200, { run: safeRun });
+    return;
+  }
+
+  // GET /api/runs/:id/log -- SSE log stream (must be before generic GET /api/runs/:id)
+  if (request.method === "GET" && /^\/api\/runs\/[^/]+\/log$/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.split("/").at(-2) || "");
+    const run = runs.get(id);
+    if (!run) {
+      sendJson(response, 404, { error: "Run not found." });
+      return;
+    }
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    });
+    run.sseClients = run.sseClients || new Set();
+    run.sseClients.add(response);
+
+    // 如果 run 已经结束，立即推送 status 并关闭
+    if (run.status !== "running" && run.status !== "paused") {
+      const msg = `event: status\ndata: ${JSON.stringify({ status: run.status, exitCode: run.exitCode })}\n\n`;
+      response.write(msg);
+      response.end();
+      run.sseClients.delete(response);
+      return;
+    }
+    if (run.status === "paused") {
+      const msg = `event: status\ndata: ${JSON.stringify({ status: "paused" })}\n\n`;
+      response.write(msg);
+    }
+
+    let offset = 0;
+    const sendChunk = async () => {
+      try {
+        const s = await stat(run.logPath);
+        if (s.size > offset) {
+          const fh = await open(run.logPath, "r");
+          const buf = Buffer.alloc(s.size - offset);
+          await fh.read(buf, 0, buf.length, offset);
+          await fh.close();
+          offset = s.size;
+          response.write(`data: ${JSON.stringify({ log: buf.toString("utf8") })}\n\n`);
+        }
+      } catch {}
+    };
+    await sendChunk();
+    let watcher;
+    try { watcher = watch(run.logPath, () => sendChunk()); } catch {}
+    const poll = setInterval(sendChunk, 1000);
+    request.on("close", () => {
+      if (watcher) watcher.close();
+      clearInterval(poll);
+      run.sseClients?.delete(response);
+    });
     return;
   }
 
@@ -148,7 +268,7 @@ async function handleApi(request, response, url) {
     try {
       log = await readFile(run.logPath, "utf8");
     } catch {}
-    const { child, ...safeRun } = run;
+    const { child, sseClients, stdoutBuffer, ...safeRun } = run;
     sendJson(response, 200, { ...safeRun, log: log.slice(-6000) });
     return;
   }
@@ -192,10 +312,13 @@ async function handleApi(request, response, url) {
       status: "running",
       command: `${command} ${args.join(" ")}`,
       out,
+      threadId: body.threadId || "default",
       logPath,
       startedAt: new Date().toISOString(),
       endedAt: null,
       exitCode: null,
+      stdoutBuffer: "",
+      sseClients: new Set(),
     };
     runs.set(runId, run);
 
@@ -211,6 +334,10 @@ async function handleApi(request, response, url) {
 
     run.child = child;
     run.pid = child.pid;
+    // tap stdout to detect HITL pause marker (CLI exits 0 for both pause and complete)
+    child.stdout.on("data", (chunk) => {
+      run.stdoutBuffer = (run.stdoutBuffer + chunk.toString()).slice(-8192);
+    });
     child.stdout.pipe(logStream);
     child.stderr.pipe(logStream);
     child.on("error", (error) => {
@@ -218,17 +345,44 @@ async function handleApi(request, response, url) {
       run.endedAt = new Date().toISOString();
       logStream.write(`\n[spawn error] ${error.message}\n`);
       logStream.end();
+      _notifySseClients(run);
     });
     child.on("close", (code) => {
-      if (run.status !== "stopped") run.status = code === 0 ? "completed" : "failed";
+      if (run.status !== "stopped") {
+        if (code === 0 && run.stdoutBuffer.includes("pipeline paused before human_review")) {
+          run.status = "paused";
+        } else {
+          run.status = code === 0 ? "completed" : "failed";
+        }
+      }
       run.exitCode = code;
       run.endedAt = new Date().toISOString();
-      logStream.write(`\n[exit ${code}]\n`);
+      logStream.write(`\n[exit ${code}] [status ${run.status}]\n`);
       logStream.end();
+      _notifySseClients(run);
     });
 
-    const { child: _child, ...safeRun } = run;
+    const { child: _child, sseClients: _s, stdoutBuffer: _b, ...safeRun } = run;
     sendJson(response, 202, { run: safeRun });
+    return;
+  }
+
+  // POST /api/runs/:id/resume -- resume a paused HITL run
+  if (request.method === "POST" && url.pathname.startsWith("/api/runs/") && url.pathname.endsWith("/resume")) {
+    const id = decodeURIComponent(url.pathname.split("/").at(-2) || "");
+    const run = runs.get(id);
+    if (!run) {
+      sendJson(response, 404, { error: "Run not found." });
+      return;
+    }
+    if (run.status !== "paused") {
+      sendJson(response, 409, { error: `Run is ${run.status}, not paused.` });
+      return;
+    }
+    const body = await readJsonBody(request);
+    await _spawnResume(run, body.approve !== false, body.notes || "");
+    const { child, sseClients, ...safeRun } = run;
+    sendJson(response, 200, { run: safeRun });
     return;
   }
 

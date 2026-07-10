@@ -41,6 +41,7 @@ let activeTemplate = "default";
 let toastTimer;
 let currentRunId = null;
 let pollTimer = null;
+let logStream = null;
 let lastArtifacts = null;
 let currentFixturePath = null;
 
@@ -78,14 +79,15 @@ function updatePipeline(mode = "local") {
   pipelineItems.forEach((item, index) => {
     item.classList.toggle("done", index < stageIndex);
     item.classList.toggle("active", index === stageIndex && stageIndex < stages.length);
+    item.classList.toggle("paused", mode === "paused" && index === stageIndex);
   });
   const isComplete = stageIndex >= stages.length;
-  currentStage.textContent = isComplete ? "Completed" : stages[Math.max(0, Math.min(stageIndex, stages.length - 1))];
+  currentStage.textContent = isComplete ? "Completed" : (mode === "paused" ? "Paused" : stages[Math.max(0, Math.min(stageIndex, stages.length - 1))]);
   nodeProgress.textContent = `${Math.min(stageIndex + 1, stages.length)} / ${stages.length}`;
   qualityScore.textContent = isComplete ? "92.1" : (82 + Math.max(0, stageIndex) * 1.4).toFixed(1);
   runButton.textContent = mode === "running" ? "运行中" : isComplete ? "重新运行" : "启动流水线";
   runButton.disabled = mode === "running";
-  runState.textContent = mode === "running" ? "Running" : isComplete ? "Done" : "Ready";
+  runState.textContent = mode === "running" ? "Running" : mode === "paused" ? "Paused" : isComplete ? "Done" : "Ready";
 }
 
 function updateCommand() {
@@ -264,7 +266,8 @@ async function startProjectRun() {
   });
   currentRunId = run.id;
   showToast("已启动项目流水线");
-  pollCurrentRun();
+  startLogStream(currentRunId);
+  pollTimer = window.setTimeout(pollCurrentRun, 2000);
 }
 
 async function pollCurrentRun() {
@@ -272,21 +275,140 @@ async function pollCurrentRun() {
   window.clearTimeout(pollTimer);
   try {
     const run = await api(`/api/runs/${encodeURIComponent(currentRunId)}`);
-    if (run.status === "running") {
-      stageIndex = Math.min(stageIndex + 1, stages.length - 1);
-      updatePipeline("running");
+    if (run.status === "running" || run.status === "paused") {
       setRunLogPreview(run);
-      pollTimer = window.setTimeout(pollCurrentRun, 1800);
+      // 开始 SSE 日志流（如果还没开始）
+      if (!logStream) startLogStream(currentRunId);
+      if (run.status === "paused") {
+        handlePaused(run);
+      } else {
+        pollTimer = window.setTimeout(pollCurrentRun, 3000);
+      }
       return;
     }
-    stageIndex = run.status === "completed" ? stages.length : stageIndex;
-    updatePipeline();
-    setRunLogPreview(run);
-    showToast(run.status === "completed" ? "流水线完成" : "流水线失败，已显示日志");
-    if (run.status === "completed") await loadArtifacts("paper");
+    handleRunEnd(run);
   } catch (error) {
     updatePipeline();
     showToast(error.message);
+  }
+}
+
+function startLogStream(runId) {
+  // 关闭旧的 SSE 连接
+  if (logStream) { try { logStream.close(); } catch {} }
+  try {
+    logStream = new EventSource(`/api/runs/${encodeURIComponent(runId)}/log`);
+  } catch {
+    // EventSource 不可用 -> 回退到纯轮询
+    return;
+  }
+  let logBuffer = "";
+  logStream.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.log) {
+        logBuffer = (logBuffer + data.log).slice(-6000);
+        updateLogPreview(logBuffer);
+        advanceStageFromLog(data.log);
+      }
+    } catch {}
+  };
+  logStream.addEventListener("status", (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      // SSE 推送了终态 -> 拉取最终 run 信息
+      if (data.status && data.status !== "running") {
+        logStream.close();
+        logStream = null;
+        pollCurrentRun();
+      }
+    } catch {}
+  });
+  logStream.onerror = () => {
+    // SSE 断开 -> 回退到轮询
+    try { logStream.close(); } catch {}
+    logStream = null;
+    if (currentRunId) pollTimer = window.setTimeout(pollCurrentRun, 2000);
+  };
+}
+
+function updateLogPreview(logText) {
+  const esc = logText.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+  artifactPreview.innerHTML = `
+    <h3>运行日志</h3>
+    <pre class="log-preview">${esc}</pre>
+  `;
+}
+
+function advanceStageFromLog(logChunk) {
+  const lower = logChunk.toLowerCase();
+  for (let i = stageIndex; i < stages.length; i++) {
+    if (lower.includes(stages[i].toLowerCase())) {
+      stageIndex = i;
+      updatePipeline("running");
+      break;
+    }
+  }
+}
+
+function handlePaused(run) {
+  // HITL 暂停：停在 human_review（Evaluation 之前）
+  stageIndex = stages.indexOf("Evaluation") - 1;
+  if (stageIndex < 0) stageIndex = stages.length - 3;
+  updatePipeline("paused");
+  setRunLogPreview(run);
+  showToast("流水线暂停，等待人工审核");
+  showResumeBar(run);
+}
+
+function handleRunEnd(run) {
+  if (logStream) { try { logStream.close(); } catch {} logStream = null; }
+  stageIndex = run.status === "completed" ? stages.length : stageIndex;
+  updatePipeline();
+  setRunLogPreview(run);
+  if (run.status === "completed") {
+    showToast("流水线完成");
+    loadArtifacts("paper").catch(() => {});
+  } else if (run.status === "paused") {
+    handlePaused(run);
+  } else {
+    showToast("流水线失败，已显示日志");
+  }
+}
+
+function showResumeBar(run) {
+  const esc = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+  artifactPreview.innerHTML = `
+    <h3>等待人工审核</h3>
+    <p>流水线已暂停在 human_review 节点。请审核当前结果后选择继续或拒绝。</p>
+    <div class="resume-bar">
+      <button class="primary-button" type="button" id="resumeApprove">批准并继续</button>
+      <button class="ghost-button" type="button" id="resumeReject">拒绝</button>
+    </div>
+    <pre class="log-preview">${esc(run.log || "")}</pre>
+  `;
+  document.querySelector("#resumeApprove")?.addEventListener("click", () => resumeRun(true));
+  document.querySelector("#resumeReject")?.addEventListener("click", () => resumeRun(false));
+}
+
+async function resumeRun(approve) {
+  if (!currentRunId) return;
+  try {
+    const { run } = await api(`/api/runs/${encodeURIComponent(currentRunId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ approve }),
+    });
+    currentRunId = run.id;
+    showToast(approve ? "已批准，继续运行" : "已拒绝，继续运行");
+    // 关闭旧 SSE，重新开始
+    if (logStream) { try { logStream.close(); } catch {} logStream = null; }
+    stageIndex = stages.indexOf("Evaluation");
+    updatePipeline("running");
+    setPreview("正在恢复运行", "正在执行 resume 命令，日志会自动刷新。");
+    startLogStream(currentRunId);
+    pollTimer = window.setTimeout(pollCurrentRun, 2000);
+  } catch (error) {
+    showToast(`恢复失败: ${error.message}`);
   }
 }
 
@@ -301,6 +423,7 @@ runButton?.addEventListener("click", () => {
 resetPipelineButton?.addEventListener("click", () => {
   currentRunId = null;
   window.clearTimeout(pollTimer);
+  if (logStream) { try { logStream.close(); } catch {} logStream = null; }
   stageIndex = 0;
   updatePipeline();
   setPreview("流水线状态已刷新", "已回到 Analyst 起点。再次点击启动会调用项目 CLI。");
