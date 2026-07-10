@@ -31,7 +31,7 @@ def _setup_all_mocks(mocker, workdir):
 
     # blueprint_critic 审查通过
     mocker.patch("math_agent.nodes.blueprint_critic.complete",
-                 return_value=CriticReport(target="analyst", score=9, approved=True))
+                 return_value=CriticReport(target="analyst", score=9, approved=True, critic_type="blueprint"))
 
     stage_iter = iter(["basic", "improved", "final"])
 

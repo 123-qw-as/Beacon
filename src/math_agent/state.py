@@ -187,6 +187,9 @@ class CriticReport(BaseModel):
     approved: bool = False
     # stage 标记 critic 是针对哪个建模阶段产生的；analyst/coder/writer/paper 类型可为 None
     stage: Optional[ModelStage] = None
+    # critic_type 区分同 target 的不同 reviewer（如 target="analyst" 的 blueprint_critic
+    # 和将来可能的 data_auditor）。默认空字符串兼容旧数据。
+    critic_type: str = ""
 
 
 class ModelCodeConsistencyReport(BaseModel):
@@ -313,10 +316,15 @@ class MathModelingState(BaseModel):
     def latest_model(self) -> ModelVersion | None:
         return self.model_versions[-1] if self.model_versions else None
 
-    def latest_critic(self, target: str) -> CriticReport | None:
+    def latest_critic(self, target: str, critic_type: str = "") -> CriticReport | None:
+        """返回最新的 target 匹配的 CriticReport。
+
+        critic_type 非空时额外按 critic_type 筛选，防止同 target 的不同 reviewer 碰撞。
+        """
         for r in reversed(self.critic_reports):
             if r.target == target:
-                return r
+                if not critic_type or r.critic_type == critic_type:
+                    return r
         return None
 
     def latest_critic_for_stage(self, target: str, stage: ModelStage) -> CriticReport | None:

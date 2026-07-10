@@ -61,7 +61,7 @@ def test_blueprint_summary_extracts_scores(tmp_path):
         question_coverage=[ModelQuestionCoverage(question_id="q1", how_answered="eq1")],
     ))
     state.critic_reports.append(CriticReport(
-        target="analyst", score=8, approved=True))
+        target="analyst", score=8, approved=True, critic_type="blueprint"))
     state.model_code_reports.append(ModelCodeConsistencyReport(score=7, approved=True))
 
     # mock: build_graph + get_state 返回构造的 state
@@ -101,7 +101,7 @@ def test_blueprint_summary_counts_unresolved_issues(tmp_path):
 
     state = MathModelingState(problem="test")
     state.critic_reports.append(CriticReport(
-        target="analyst", score=4, approved=False,
+        target="analyst", score=4, approved=False, critic_type="blueprint",
         issues=[CriticIssue(problem="遗漏小问"), CriticIssue(problem="变量空泛")]))
     state.model_code_reports.append(ModelCodeConsistencyReport(
         score=3, approved=False, issues=["missing variable x"]))

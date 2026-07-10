@@ -10,6 +10,7 @@ def blueprint_critic_node(state: MathModelingState) -> dict:
         # 没有蓝图无法审查；直接返回未通过，触发 retry
         report = CriticReport(
             target="analyst", score=0, approved=False,
+            critic_type="blueprint",
             issues=[],
             suggestions=["analyst 未产出 problem_blueprint，请重试"],
         )
@@ -21,8 +22,7 @@ def blueprint_critic_node(state: MathModelingState) -> dict:
         prompt, schema=CriticReport, system=SYSTEM, model=MODEL_ROUTING["model_critic"]
     )
     out.target = "analyst"  # 防篡改
-    # TODO: 如果将来有多个 target="analyst" 的 critic，需要按 critic_type 筛选
-    #       当前只有一个 blueprint_critic，latest_critic("analyst") 是安全的
+    out.critic_type = "blueprint"  # 区分同 target 的不同 reviewer
     return {
         "critic_reports": [out],
         "blueprint_iteration": state.blueprint_iteration + 1,

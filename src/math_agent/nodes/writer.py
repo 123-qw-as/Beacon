@@ -65,6 +65,11 @@ def writer_node(state: MathModelingState) -> dict:
         "writer_section_queue": queue,
         "writer_outline_dump": outline.model_dump(),
         "writer_retrieved_context": ctx,
+        # writer_iteration 在 prep（而非完整 writer->critic 循环后）递增：
+        # routing 的 after_paper_critic 用 writer_iteration >= MAX_WRITER_ITERATIONS 判定
+        # "是否允许再 retry 回 writer"。prep 进入即代表一轮 writer 开始，
+        # 所以 prep 递增保证：iteration=1 首轮写完后 critic 可 retry 回 writer(iteration=2)，
+        # iteration=2 写完后 critic 若仍不通过则 advance（>= MAX=2）。
         "writer_iteration": state.writer_iteration + 1,
     }
 

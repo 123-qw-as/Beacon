@@ -53,7 +53,7 @@ def _setup_mocks(stack: ExitStack, *, paper: PaperSections,
 
     # blueprint_critic 审查通过
     _patch("math_agent.nodes.blueprint_critic.complete",
-           side_effect=itertools.cycle([CriticReport(target="analyst", score=9, approved=True)]))
+           side_effect=itertools.cycle([CriticReport(target="analyst", score=9, approved=True, critic_type="blueprint")]))
 
     def _modeler_complete(prompt, *, schema, **kw):
         # final 阶段会额外调用 derivation steps + consistency gate，
@@ -96,8 +96,25 @@ def _setup_mocks(stack: ExitStack, *, paper: PaperSections,
                FigureAnalysisOut(analysis="趋势单调。"),
            ]))
 
-    _patch("math_agent.nodes.writer.complete",
-           side_effect=itertools.cycle([paper]))
+    # writer: 按 schema 分派（WriterOutline vs 各 section schema）
+    from math_agent.prompts.writer_section import (
+        WriterOutline, _AbstractProblemOut, _AssumptionsNotationOut,
+        _ModelOut, _SolutionOut, _SensitivityOut, _ConclusionOut, _ReferencesOut,
+    )
+    _section_payloads = {
+        WriterOutline: WriterOutline(),
+        _AbstractProblemOut: _AbstractProblemOut(
+            abstract=paper.abstract, problem_restatement=paper.problem_restatement, keywords=""),
+        _AssumptionsNotationOut: _AssumptionsNotationOut(assumptions=paper.assumptions, notation=paper.notation),
+        _ModelOut: _ModelOut(model_section=paper.model_section),
+        _SolutionOut: _SolutionOut(solution=paper.solution),
+        _SensitivityOut: _SensitivityOut(sensitivity=paper.sensitivity),
+        _ConclusionOut: _ConclusionOut(conclusion=paper.conclusion),
+        _ReferencesOut: _ReferencesOut(references=paper.references),
+    }
+    def _writer_complete(prompt, *, schema, **kw):
+        return _section_payloads.get(schema, paper)
+    _patch("math_agent.nodes.writer.complete", side_effect=_writer_complete)
     _patch("math_agent.nodes.paper_critic.complete",
            side_effect=itertools.cycle([CriticReport(target="paper", score=9, approved=True)]))
     _patch("math_agent.nodes.evaluation.complete",

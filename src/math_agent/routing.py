@@ -17,7 +17,7 @@ def after_blueprint_critic(state: MathModelingState) -> str:
     - == 1：analyst 首轮输出已被审查一次。若未通过，允许一次 retry。
     - >= 2：第二次审查仍未通过，则带警告前进（最多一次 retry）。
     """
-    report = state.latest_critic("analyst")
+    report = state.latest_critic("analyst", critic_type="blueprint")
     if report is None:
         return "retry"
     if report.approved:

@@ -22,7 +22,7 @@ def analyst_node(state: MathModelingState) -> dict:
         ctx = format_snippets(snippets, max_chars=RAG_CTX_MAX_CHARS_ANALYST)
 
     # 如果上一轮 blueprint_critic 未通过，把 issues/suggestions 注入 prompt
-    critic_fb = state.latest_critic("analyst")
+    critic_fb = state.latest_critic("analyst", critic_type="blueprint")
     if critic_fb is not None and critic_fb.approved:
         critic_fb = None
 

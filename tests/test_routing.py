@@ -70,6 +70,7 @@ def _state_with_blueprint_critic(approved: bool, iteration: int):
     s = MathModelingState(problem="p", blueprint_iteration=iteration)
     s.critic_reports.append(CriticReport(
         target="analyst", score=9 if approved else 4, approved=approved,
+        critic_type="blueprint",
     ))
     return s
 

@@ -84,7 +84,7 @@ def test_analyst_injects_critic_feedback(mocker):
     spy = mocker.patch("math_agent.nodes.analyst.complete", return_value=_blueprint())
     s = MathModelingState(problem="p")
     s.critic_reports.append(CriticReport(
-        target="analyst", score=4, approved=False,
+        target="analyst", score=4, approved=False, critic_type="blueprint",
         issues=[CriticIssue(problem="遗漏小问2")], suggestions=["补充小问2"],
     ))
     analyst_node(s)

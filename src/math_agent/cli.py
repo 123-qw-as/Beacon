@@ -24,22 +24,23 @@ from math_agent.tracing import Tracer, get_last_node, set_current, reset_current
 app = typer.Typer(help="Math modeling multi-agent system.")
 
 
-def _dump_state_summary(out: Path, thread: str = "default") -> None:
-    """从 checkpoint 读 final state，写 state_summary.json 供 Web UI 消费。
+def _read_state_summary_data(out: Path, thread: str = "default") -> dict | None:
+    """从 checkpoint 读 final state，提取 blueprint/critic/consistency 摘要数据。
 
-    ponytail: 直接从 checkpoint 读，不侵入 graph 节点。无 checkpoint 时静默跳过。
+    _dump_state_summary 和 _print_blueprint_summary 共用此函数，避免重复代码。
+    无 checkpoint 或读取失败时返回 None。
     """
     chk = out / "checkpoints.sqlite"
     if not chk.exists():
-        return
+        return None
     try:
         with _saver_cm(out) as saver:
             g = build_graph(checkpointer=saver)
             snap = g.get_state(_config(thread))
     except Exception:
-        return
+        return None
     if snap is None or snap.values is None:
-        return
+        return None
 
     state = snap.values
 
@@ -53,21 +54,16 @@ def _dump_state_summary(out: Path, thread: str = "default") -> None:
     mc_reports = _get("model_code_reports") or []
     models = _get("model_versions") or []
 
-    # blueprint critic
     bp_critic = next(
         (r for r in reversed(critics) if getattr(r, "target", "") == "analyst"), None)
-    # model critic (latest)
     model_critic = next(
         (r for r in reversed(critics) if getattr(r, "target", "") == "modeler"), None)
-    # paper critic (latest)
     paper_critic = next(
         (r for r in reversed(critics) if getattr(r, "target", "") == "paper"), None)
 
-    # question coverage
     total_sq = len(getattr(bp, "subquestions", []) or []) if bp else 0
     covered = len(getattr(models[-1], "question_coverage", []) or []) if models else 0
 
-    # unresolved issues
     unresolved = 0
     for r in critics:
         if not getattr(r, "approved", True):
@@ -75,6 +71,36 @@ def _dump_state_summary(out: Path, thread: str = "default") -> None:
     for r in mc_reports:
         if not getattr(r, "approved", True):
             unresolved += len(getattr(r, "issues", []) or [])
+
+    return {
+        "bp": bp,
+        "bp_critic": bp_critic,
+        "model_critic": model_critic,
+        "paper_critic": paper_critic,
+        "mc_reports": mc_reports,
+        "models": models,
+        "total_sq": total_sq,
+        "covered": covered,
+        "unresolved": unresolved,
+        "stage_target": _get("stage_target"),
+        "iteration": _get("iteration"),
+    }
+
+
+def _dump_state_summary(out: Path, thread: str = "default") -> None:
+    """从 checkpoint 读 final state，写 state_summary.json 供 Web UI 消费。
+
+    ponytail: 直接从 checkpoint 读，不侵入 graph 节点。无 checkpoint 时静默跳过。
+    """
+    data = _read_state_summary_data(out, thread)
+    if data is None:
+        return
+
+    bp = data["bp"]
+    bp_critic = data["bp_critic"]
+    model_critic = data["model_critic"]
+    paper_critic = data["paper_critic"]
+    mc_reports = data["mc_reports"]
 
     summary = {
         "problem_blueprint": bp.model_dump() if bp else None,
@@ -101,10 +127,10 @@ def _dump_state_summary(out: Path, thread: str = "default") -> None:
             "missing_constraints": getattr(mc_reports[-1], "missing_constraints", []) or [] if mc_reports else [],
             "issues": getattr(mc_reports[-1], "issues", []) or [] if mc_reports else [],
         } if mc_reports else None,
-        "question_coverage": f"{covered}/{total_sq}",
-        "unresolved_issues": unresolved,
-        "stage_target": _get("stage_target"),
-        "iteration": _get("iteration"),
+        "question_coverage": f"{data['covered']}/{data['total_sq']}",
+        "unresolved_issues": data["unresolved"],
+        "stage_target": data["stage_target"],
+        "iteration": data["iteration"],
     }
     (out / "state_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, default=str),
@@ -244,7 +270,10 @@ def recover(
 
 
 @app.command()
-def report(out: Path = typer.Option(Path("runs/latest"))):
+def report(
+    out: Path = typer.Option(Path("runs/latest")),
+    thread: str = typer.Option("default"),
+):
     """打印一次运行的 trace 报告 + per-model / per-node 摘要 + blueprint/一致性摘要。"""
     trace_path = out / "trace.json"
     if not trace_path.exists():
@@ -273,44 +302,27 @@ def report(out: Path = typer.Option(Path("runs/latest"))):
     c.print(tn)
 
     # P2 §6.3: blueprint + 一致性摘要（从 checkpoint 读 final state）
-    _print_blueprint_summary(c, out)
+    _print_blueprint_summary(c, out, thread)
 
 
-def _print_blueprint_summary(c: Console, out: Path) -> None:
+def _print_blueprint_summary(c: Console, out: Path, thread: str = "default") -> None:
     """从 checkpoint 读取 final state，打印 blueprint/一致性摘要。"""
-    chk = out / "checkpoints.sqlite"
-    if not chk.exists():
+    data = _read_state_summary_data(out, thread)
+    if data is None:
         return
-    try:
-        with _saver_cm(out) as saver:
-            g = build_graph(checkpointer=saver)
-            snap = g.get_state(_config("default"))
-    except Exception:
-        return  # checkpoint 损坏等 -> 静默跳过
-    if snap is None or snap.values is None:
-        return
-
-    state = snap.values
-
-    def _get(key, default=None):
-        if isinstance(state, dict):
-            return state.get(key, default)
-        return getattr(state, key, default)
 
     tq = Table(title="Blueprint & Consistency")
     tq.add_column("metric"); tq.add_column("value")
 
     # Blueprint critic score
-    critics = _get("critic_reports") or []
-    bp_critic = next(
-        (r for r in reversed(critics) if getattr(r, "target", "") == "analyst"), None)
+    bp_critic = data["bp_critic"]
     if bp_critic is not None:
         tq.add_row("Blueprint Score", f"{getattr(bp_critic, 'score', '?')}/10")
     else:
         tq.add_row("Blueprint Score", "N/A")
 
     # Model-code consistency score
-    mc_reports = _get("model_code_reports") or []
+    mc_reports = data["mc_reports"]
     if mc_reports:
         last = mc_reports[-1]
         tq.add_row("Model-Code Score", f"{getattr(last, 'score', '?')}/10")
@@ -318,21 +330,10 @@ def _print_blueprint_summary(c: Console, out: Path) -> None:
         tq.add_row("Model-Code Score", "N/A")
 
     # Question coverage
-    bp = _get("problem_blueprint")
-    models = _get("model_versions") or []
-    total_sq = len(getattr(bp, "subquestions", []) or []) if bp else 0
-    covered = len(getattr(models[-1], "question_coverage", []) or []) if models else 0
-    tq.add_row("Question Coverage", f"{covered}/{total_sq}")
+    tq.add_row("Question Coverage", f"{data['covered']}/{data['total_sq']}")
 
-    # Unresolved issues: 统计所有 critic/consistency 报告中未通过的 issue 数
-    unresolved = 0
-    for r in critics:
-        if not getattr(r, "approved", True):
-            unresolved += len(getattr(r, "issues", []) or [])
-    for r in mc_reports:
-        if not getattr(r, "approved", True):
-            unresolved += len(getattr(r, "issues", []) or [])
-    tq.add_row("Unresolved Issues", str(unresolved))
+    # Unresolved issues
+    tq.add_row("Unresolved Issues", str(data["unresolved"]))
 
     c.print(tq)
 

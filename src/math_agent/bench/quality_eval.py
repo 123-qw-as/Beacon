@@ -17,6 +17,16 @@ from pathlib import Path
 _BENCH_ROOT = Path(__file__).resolve().parent
 _RUBRICS_DIR = _BENCH_ROOT / "rubrics"
 
+# 扣分常量：每项检查不通过时从 10 分中扣除的分数。
+# 严重问题（缺失核心产出）扣 4 分 -> 6 分（低于门槛 7）；
+# 中等问题（缺少非核心字段）扣 2-3 分；
+# 轻微问题（缺少提及）扣 1 分。
+# max(0, score) 保证不为负，但扩展时注意单项检查不超过 2 个扣分点。
+PENALTY_SEVERE = 4     # 缺失核心产出（无成功代码、无 RESULT 行、一致性未通过）
+PENALTY_MEDIUM = 3     # 缺失重要结构（小问不足、无 question_coverage）
+PENALTY_MINOR = 2      # 缺失非核心字段（目标/约束/指标/路线/验证计划、关键词缺失）
+PENALTY_LIGHT = 1      # 缺少提及（baseline 关键词）
+
 
 @dataclass
 class QualityScore:
@@ -54,7 +64,7 @@ def _score_blueprint(state, rubric: dict) -> tuple[int, list[str]]:
     subqs = getattr(bp, "subquestions", []) or []
     min_sq = spec.get("min_subquestions", 0)
     if len(subqs) < min_sq:
-        score -= 3
+        score -= PENALTY_MEDIUM
         issues.append(f"subquestions {len(subqs)} < {min_sq}")
 
     checks = [
@@ -68,7 +78,7 @@ def _score_blueprint(state, rubric: dict) -> tuple[int, list[str]]:
         if spec.get(flag):
             val = getattr(bp, attr, None)
             if not val:
-                score -= 2
+                score -= PENALTY_MINOR
                 issues.append(f"blueprint missing {attr}")
 
     return max(0, score), issues
@@ -87,13 +97,13 @@ def _score_model(state, rubric: dict) -> tuple[int, list[str]]:
     if spec.get("must_have_question_coverage"):
         cov = getattr(model, "question_coverage", []) or []
         if not cov:
-            score -= 3
+            score -= PENALTY_MEDIUM
             issues.append("missing question_coverage")
 
     min_deriv = spec.get("must_have_derivation_steps", 0)
     steps = len(getattr(model, "derivation_steps", []) or [])
     if min_deriv and steps < min_deriv:
-        score -= 2
+        score -= PENALTY_MINOR
         issues.append(f"derivation_steps {steps} < {min_deriv}")
 
     if spec.get("must_have_baseline"):
@@ -101,7 +111,7 @@ def _score_model(state, rubric: dict) -> tuple[int, list[str]]:
         desc = getattr(model, "description", "") or ""
         # ponytail: 宽松匹配 baseline 关键词，避免对 LLM 措辞过度敏感
         if "baseline" not in (notes + desc).lower():
-            score -= 1
+            score -= PENALTY_LIGHT
             issues.append("model missing baseline mention")
 
     # model_critic 是否通过
@@ -109,7 +119,7 @@ def _score_model(state, rubric: dict) -> tuple[int, list[str]]:
     model_critic = next(
         (r for r in reversed(critics) if _get(r, "target", "") == "modeler"), None)
     if model_critic is not None and not _get(model_critic, "approved", False):
-        score -= 2
+        score -= PENALTY_MINOR
         issues.append("model_critic not approved")
 
     return max(0, score), issues
@@ -127,7 +137,7 @@ def _score_code(state, rubric: dict) -> tuple[int, list[str]]:
     success = [a for a in artifacts if _get(a, "success", False)]
     min_success = spec.get("min_success_artifacts", 0)
     if len(success) < min_success:
-        score -= 4
+        score -= PENALTY_SEVERE
         issues.append(f"success artifacts {len(success)} < {min_success}")
 
     if spec.get("must_have_result_lines"):
@@ -136,7 +146,7 @@ def _score_code(state, rubric: dict) -> tuple[int, list[str]]:
             for a in success
         )
         if not has_result:
-            score -= 4
+            score -= PENALTY_SEVERE
             issues.append("no RESULT: lines in successful stdout")
 
     if spec.get("must_have_consistency_approved"):
@@ -144,10 +154,10 @@ def _score_code(state, rubric: dict) -> tuple[int, list[str]]:
         if reports:
             last = reports[-1]
             if not _get(last, "approved", False):
-                score -= 4
+                score -= PENALTY_SEVERE
                 issues.append("model_code_consistency not approved")
         else:
-            score -= 2
+            score -= PENALTY_MINOR
             issues.append("no model_code_reports")
 
     return max(0, score), issues
@@ -168,7 +178,7 @@ def _score_paper(state, rubric: dict) -> tuple[int, list[str]]:
     ])
     for kw in spec.get("must_contain_keywords", []):
         if kw not in text:
-            score -= 2
+            score -= PENALTY_MINOR
             issues.append(f"paper missing keyword: {kw}")
 
     evaluation = _get(state, "evaluation")
@@ -176,7 +186,7 @@ def _score_paper(state, rubric: dict) -> tuple[int, list[str]]:
         overall = float(getattr(evaluation, "overall", 0))
         min_overall = spec.get("min_overall", 0)
         if overall < min_overall:
-            score -= 2
+            score -= PENALTY_MINOR
             issues.append(f"evaluation overall {overall} < {min_overall}")
 
     # paper_critic 是否通过
@@ -184,7 +194,7 @@ def _score_paper(state, rubric: dict) -> tuple[int, list[str]]:
     paper_critic = next(
         (r for r in reversed(critics) if _get(r, "target", "") == "paper"), None)
     if paper_critic is not None and not _get(paper_critic, "approved", False):
-        score -= 2
+        score -= PENALTY_MINOR
         issues.append("paper_critic not approved")
 
     return max(0, score), issues

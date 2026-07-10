@@ -15,7 +15,7 @@ def _blueprint():
 
 
 def test_blueprint_critic_generates_analyst_target_report(mocker):
-    fake = CriticReport(target="analyst", score=9, approved=True)
+    fake = CriticReport(target="analyst", score=9, approved=True, critic_type="blueprint")
     mocker.patch("math_agent.nodes.blueprint_critic.complete", return_value=fake)
 
     s = MathModelingState(problem="p", blueprint_iteration=0)
@@ -32,7 +32,7 @@ def test_blueprint_critic_generates_analyst_target_report(mocker):
 
 def test_blueprint_critic_increments_iteration(mocker):
     mocker.patch("math_agent.nodes.blueprint_critic.complete",
-                 return_value=CriticReport(target="analyst", score=4, approved=False))
+                 return_value=CriticReport(target="analyst", score=4, approved=False, critic_type="blueprint"))
 
     s = MathModelingState(problem="p", blueprint_iteration=1)
     s.problem_blueprint = _blueprint()
@@ -57,7 +57,7 @@ def test_blueprint_critic_handles_missing_blueprint(mocker):
 
 def test_blueprint_critic_injects_blueprint_into_prompt(mocker):
     spy = mocker.patch("math_agent.nodes.blueprint_critic.complete",
-                       return_value=CriticReport(target="analyst", score=9, approved=True))
+                       return_value=CriticReport(target="analyst", score=9, approved=True, critic_type="blueprint"))
     s = MathModelingState(problem="调度问题", questions=["预测", "调度"])
     s.problem_blueprint = _blueprint()
     blueprint_critic_node(s)
