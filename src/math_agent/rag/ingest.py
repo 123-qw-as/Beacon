@@ -35,9 +35,16 @@ def _sanitize_text(s: str) -> str:
 
 
 def _extract_pdf_text(path: Path) -> str:
-    from pypdf import PdfReader
-    reader = PdfReader(str(path))
-    raw = "\n\n".join(page.extract_text() or "" for page in reader.pages)
+    # 优先使用 PyMuPDF (fitz)，其对数学符号/CID 字体的解码远优于 pypdf
+    try:
+        import fitz  # pymupdf
+        doc = fitz.open(str(path))
+        raw = "\n\n".join(page.get_text() or "" for page in doc)
+        doc.close()
+    except ImportError:
+        from pypdf import PdfReader
+        reader = PdfReader(str(path))
+        raw = "\n\n".join(page.extract_text() or "" for page in reader.pages)
     return _sanitize_text(raw)
 
 
@@ -86,8 +93,12 @@ def ingest_directory(
                                 source=str(p), source_type=_derive_source_type(p))
             if not chunks:
                 continue
-            embeddings = embed_texts([c.text for c in chunks], model=embedding_model)
-            added = store.add(chunks=chunks, embeddings=embeddings)
+            new_chunks = store.missing_chunks(chunks)
+            if new_chunks:
+                embeddings = embed_texts([c.text for c in new_chunks], model=embedding_model)
+                added = store.add(chunks=new_chunks, embeddings=embeddings)
+            else:
+                added = 0
             files_processed += 1
             chunks_added += added
     finally:

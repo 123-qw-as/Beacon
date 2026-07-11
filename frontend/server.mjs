@@ -479,7 +479,7 @@ async function handleApi(request, response, url) {
       throw new HttpError(400, "Request body must be a JSON object.");
     }
     for (const key of ["title", "background", "outputDir", "threadId", "fixturePath", "template"]) {
-      if (body[key] !== undefined && typeof body[key] !== "string") {
+      if (body[key] != null && typeof body[key] !== "string") {
         throw new HttpError(400, `${key} must be a string.`);
       }
     }

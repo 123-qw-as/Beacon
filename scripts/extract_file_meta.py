@@ -49,12 +49,22 @@ def _meta_csv(path: Path) -> dict:
 
 
 def _meta_pdf(path: Path) -> dict:
-    from pypdf import PdfReader
-    reader = PdfReader(str(path))
-    raw = "\n\n".join(page.extract_text() or "" for page in reader.pages)
-    # ponytail: lone-surrogate 清洗，复用 rag/ingest.py 同款逻辑
+    # 优先使用 PyMuPDF (fitz)，其对数学符号/CID 字体的解码远优于 pypdf
+    try:
+        import fitz  # pymupdf
+        doc = fitz.open(str(path))
+        raw = "\n\n".join(page.get_text() or "" for page in doc)
+        total_pages = len(doc)
+        doc.close()
+    except ImportError:
+        # 降级到 pypdf（数学符号可能显示为方框）
+        from pypdf import PdfReader
+        reader = PdfReader(str(path))
+        raw = "\n\n".join(page.extract_text() or "" for page in reader.pages)
+        total_pages = len(reader.pages)
+    # lone-surrogate 清洗
     text = raw.encode("utf-8", errors="ignore").decode("utf-8")
-    return {"text_excerpt": text[:5000], "total_pages": len(reader.pages)}
+    return {"text_excerpt": text[:5000], "total_pages": total_pages}
 
 
 def _meta_docx(path: Path) -> dict:

@@ -18,7 +18,7 @@ def build_data_hint(data_dir: str | None, data_files: list) -> str:
         elif df.file_type == "csv":
             lines.append(f"- {fp} (CSV, 用 pd.read_csv 读取)")
         elif df.file_type == "pdf":
-            lines.append(f"- {fp} (PDF, 需用 pypdf 提取文本)")
+            lines.append(f'- {fp} (PDF, 需用 pymupdf 提取文本: import fitz; doc=fitz.open(r"{fp}"); text="\\n".join(p.get_text() for p in doc))')
         elif df.file_type == "docx":
             lines.append(f"- {fp} (Word, 需用 python-docx 读取)")
         else:
