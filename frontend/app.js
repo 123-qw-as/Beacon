@@ -669,7 +669,6 @@ window.addEventListener("hashchange", () => {
   const hash = window.location.hash || "#workspace";
   activateNav(hash, { loadSettingsData: true });
 });
-activateNav(window.location.hash || "#workspace");
 updatePipeline();
 updateCommand();
 api("/api/health")
