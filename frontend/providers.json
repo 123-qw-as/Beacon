@@ -1,0 +1,56 @@
+[
+  {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "apiBase": "https://api.deepseek.com/v1",
+    "defaultModel": "deepseek-chat",
+    "strongModel": "deepseek-reasoner",
+    "website": "https://platform.deepseek.com",
+    "description": "性价比高，适合数学建模"
+  },
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "apiBase": "https://api.openai.com/v1",
+    "defaultModel": "openai/gpt-4o-mini",
+    "strongModel": "openai/gpt-4o",
+    "website": "https://platform.openai.com",
+    "description": "GPT 系列，能力全面"
+  },
+  {
+    "id": "zhipu",
+    "name": "智谱 AI",
+    "apiBase": "https://open.bigmodel.cn/api/paas/v4",
+    "defaultModel": "glm-4-flash",
+    "strongModel": "glm-4",
+    "website": "https://open.bigmodel.cn",
+    "description": "GLM 系列，国产大模型"
+  },
+  {
+    "id": "moonshot",
+    "name": "月之暗面",
+    "apiBase": "https://api.moonshot.cn/v1",
+    "defaultModel": "moonshot-v1-8k",
+    "strongModel": "moonshot-v1-32k",
+    "website": "https://platform.moonshot.cn",
+    "description": "Kimi，长上下文优势"
+  },
+  {
+    "id": "ollama",
+    "name": "本地 Ollama",
+    "apiBase": "http://localhost:11434/v1",
+    "defaultModel": "llama3",
+    "strongModel": "llama3",
+    "website": "https://ollama.com",
+    "description": "本地部署，离线可用"
+  },
+  {
+    "id": "custom",
+    "name": "自定义",
+    "apiBase": "",
+    "defaultModel": "",
+    "strongModel": "",
+    "website": "",
+    "description": "手动填写端点和模型"
+  }
+]

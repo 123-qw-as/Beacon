@@ -925,3 +925,358 @@ h3 {
   border-color: var(--blue);
   box-shadow: 0 0 0 5px rgba(21, 94, 150, 0.15);
 }
+
+/* ---- 引导向导覆盖层 ---- */
+
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 27, 58, 0.6);
+  backdrop-filter: blur(6px);
+}
+
+.onboarding-overlay[hidden] {
+  display: none;
+}
+
+.onboarding-card {
+  width: min(620px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  padding: 32px;
+  border-radius: 16px;
+  background: var(--white);
+  box-shadow: 0 40px 80px rgba(7, 27, 58, 0.25);
+  overflow-y: auto;
+}
+
+.onboarding-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.onboarding-header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.onboarding-steps {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.step-dot {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background 200ms ease;
+}
+
+.step-dot.active {
+  background: var(--gold);
+}
+
+.step-dot.done {
+  background: var(--green);
+}
+
+.onboarding-body {
+  flex: 1;
+  min-height: 200px;
+  margin: 24px 0;
+}
+
+.onboarding-body h3 {
+  margin: 0 0 12px;
+  font-size: 1.1rem;
+}
+
+.onboarding-body p {
+  color: var(--ink-soft);
+  line-height: 1.6;
+}
+
+.onboarding-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* 引导步骤内容 */
+
+.env-check-list {
+  display: grid;
+  gap: 10px;
+}
+
+.env-check-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.env-check-item.ok {
+  border-color: var(--green);
+  background: #f0faf6;
+}
+
+.env-check-item.missing {
+  border-color: var(--rose);
+  background: #fff0f3;
+}
+
+.env-check-item .env-name {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.env-check-item .env-version {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.env-check-item .env-status-ok {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.env-check-item .env-status-missing {
+  color: var(--rose);
+  font-weight: 700;
+}
+
+.env-install-btn {
+  min-height: 34px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--gold);
+  color: var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.env-install-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.env-install-btn.installing {
+  background: var(--muted);
+}
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.provider-card {
+  padding: 14px;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+  cursor: pointer;
+  transition: border-color 150ms ease;
+}
+
+.provider-card:hover {
+  border-color: var(--blue);
+}
+
+.provider-card.selected {
+  border-color: var(--gold);
+  background: var(--gold-soft);
+}
+
+.provider-card strong {
+  display: block;
+  font-size: 1rem;
+}
+
+.provider-card span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* ---- 设置页面 ---- */
+
+.settings-panel[hidden] {
+  display: none;
+}
+
+.settings-layout {
+  display: flex;
+  gap: 20px;
+  min-height: 320px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.settings-nav button {
+  padding: 10px 14px;
+  text-align: left;
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-nav button.active {
+  color: var(--blue);
+  font-weight: 800;
+  border-left-color: var(--blue);
+  background: #f0f6ff;
+}
+
+.settings-content {
+  flex: 1;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.settings-content .field {
+  margin-bottom: 0;
+}
+
+.settings-content .field span {
+  font-size: 0.86rem;
+}
+
+.settings-content .field input,
+.settings-content .field select {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--white);
+  font-size: 14px;
+  outline: 0;
+}
+
+.settings-content .field input:focus,
+.settings-content .field select:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(21, 94, 150, 0.13);
+}
+
+.settings-content .field-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.settings-content .test-result {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.84rem;
+}
+
+.settings-content .test-result.ok {
+  background: #dff6eb;
+  color: var(--green);
+}
+
+.settings-content .test-result.fail {
+  background: #fff0f3;
+  color: var(--rose);
+}
+
+.settings-content .toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--line);
+  cursor: pointer;
+  transition: background 200ms ease;
+}
+
+.toggle-switch.on {
+  background: var(--green);
+}
+
+.toggle-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--white);
+  transition: transform 200ms ease;
+}
+
+.toggle-switch.on::after {
+  transform: translateX(20px);
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 860px) {
+  .settings-layout {
+    flex-direction: column;
+  }
+  .settings-nav {
+    flex-direction: row;
+    width: 100%;
+    overflow-x: auto;
+  }
+  .settings-nav button {
+    border-left: none;
+    border-bottom: 3px solid transparent;
+    white-space: nowrap;
+  }
+  .settings-nav button.active {
+    border-left: none;
+    border-bottom-color: var(--blue);
+  }
+  .provider-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -22,6 +22,7 @@
           <a href="#pipeline">流水线</a>
           <a href="#outputs">产物</a>
           <a href="#knowledge">知识库</a>
+          <a href="#settings">设置</a>
         </nav>
 
         <section class="sidebar-panel">
@@ -227,7 +228,50 @@
             </div>
           </section>
         </div>
+
+        <section class="panel settings-panel" id="settings" hidden aria-labelledby="settings-title">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Configuration</p>
+              <h2 id="settings-title">设置</h2>
+            </div>
+          </div>
+          <div class="settings-layout">
+            <nav class="settings-nav" aria-label="设置分类">
+              <button class="active" type="button" data-settings-tab="api">API 配置</button>
+              <button type="button" data-settings-tab="models">模型选择</button>
+              <button type="button" data-settings-tab="rag">RAG 知识库</button>
+              <button type="button" data-settings-tab="advanced">高级设置</button>
+            </nav>
+            <div class="settings-content" id="settingsContent"></div>
+          </div>
+          <div class="settings-footer">
+            <button class="ghost-button" type="button" id="settingsReset">重置默认</button>
+            <button class="primary-button" type="button" id="settingsSave">💾 保存配置</button>
+          </div>
+        </section>
       </main>
+    </div>
+
+    <div class="onboarding-overlay" id="onboardingOverlay" hidden>
+      <div class="onboarding-card">
+        <div class="onboarding-header">
+          <h2 id="onboardingTitle">欢迎使用 Beacon</h2>
+          <p id="onboardingSubtitle">让我们花几分钟完成初始配置</p>
+          <div class="onboarding-steps">
+            <span class="step-dot active" data-step="1"></span>
+            <span class="step-dot" data-step="2"></span>
+            <span class="step-dot" data-step="3"></span>
+            <span class="step-dot" data-step="4"></span>
+            <span class="step-dot" data-step="5"></span>
+          </div>
+        </div>
+        <div class="onboarding-body" id="onboardingBody"></div>
+        <div class="onboarding-footer">
+          <button class="ghost-button" type="button" id="onboardingPrev" disabled>上一步</button>
+          <button class="primary-button" type="button" id="onboardingNext">下一步</button>
+        </div>
+      </div>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

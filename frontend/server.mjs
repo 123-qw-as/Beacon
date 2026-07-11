@@ -7,6 +7,9 @@ import { mkdir, readFile, readdir, stat, writeFile, open } from "node:fs/promise
 import { watch } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { handleEnvRoutes } from "./routes/env.mjs";
+import { handleConfigRoutes } from "./routes/config.mjs";
+import { handleOnboardingRoutes, getOnboardingStatus } from "./routes/onboarding.mjs";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const projectRoot = resolve(root, "..");
@@ -246,6 +249,17 @@ async function _spawnResume(run, approve, notes) {
 }
 
 async function handleApi(request, response, url) {
+  // --- 新增路由：环境检测、配置、引导 ---
+  if (url.pathname.startsWith("/api/env/") || url.pathname === "/api/providers") {
+    return handleEnvRoutes(request, response, url);
+  }
+  if (url.pathname.startsWith("/api/config")) {
+    return handleConfigRoutes(request, response, url);
+  }
+  if (url.pathname.startsWith("/api/onboarding/")) {
+    return handleOnboardingRoutes(request, response, url);
+  }
+
   if (request.method === "POST" && url.pathname === "/api/upload") {
     const contentType = request.headers["content-type"] || "";
     const boundaryMatch = contentType.match(/boundary=(.+)/);
@@ -312,11 +326,13 @@ async function handleApi(request, response, url) {
 
   if (request.method === "GET" && url.pathname === "/api/health") {
     const fixtures = await listFixtures().catch(() => []);
+    const onboarding = getOnboardingStatus();
     sendJson(response, 200, {
       ok: true,
       projectRoot,
       mathAgentCommand: env.MATH_AGENT_COMMAND || "uv run math-agent",
       fixtures: fixtures.length,
+      onboarding,
     });
     return;
   }

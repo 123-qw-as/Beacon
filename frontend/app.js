@@ -33,6 +33,18 @@ const navLinks = document.querySelectorAll(".nav-list a");
 const templateButtons = document.querySelectorAll("[data-template]");
 const templateHint = document.querySelector("#templateHint");
 const pipelineItems = [...document.querySelectorAll("#pipelineList li")];
+const onboardingOverlay = document.querySelector("#onboardingOverlay");
+const onboardingBody = document.querySelector("#onboardingBody");
+const onboardingTitle = document.querySelector("#onboardingTitle");
+const onboardingSubtitle = document.querySelector("#onboardingSubtitle");
+const onboardingPrev = document.querySelector("#onboardingPrev");
+const onboardingNext = document.querySelector("#onboardingNext");
+const stepDots = document.querySelectorAll(".step-dot");
+const settingsPanel = document.querySelector("#settings");
+const settingsContent = document.querySelector("#settingsContent");
+const settingsSave = document.querySelector("#settingsSave");
+const settingsReset = document.querySelector("#settingsReset");
+const settingsNavButtons = document.querySelectorAll("[data-settings-tab]");
 
 const stages = ["Analyst", "Blueprint Critic", "Modeler", "Model Critic", "Coder", "Code Consistency", "Sensitivity", "Figure Pipeline", "Writer", "Paper Critic", "Table Assembler", "Evaluation", "Human Review", "LaTeX"];
 const stageLogNames = ["analyst", "blueprint_critic", "modeler", "model_critic", "coder", "model_code_consistency", "sensitivity", "figure_pipeline", "writer", "paper_critic", "table_assembler", "evaluation", "human_review", "latex"];
@@ -654,7 +666,517 @@ activateNav(window.location.hash || "#workspace");
 updatePipeline();
 updateCommand();
 api("/api/health")
-  .then((health) => showToast(`已连接项目：${health.fixtures} 个示例题`))
+  .then((health) => {
+    if (health.onboarding && health.onboarding.needed) {
+      showOnboarding();
+    } else {
+      showToast(`已连接项目：${health.fixtures} 个示例题`);
+    }
+  })
   .catch((error) => showToast(`项目 API 未连接：${error.message}`));
+
+// ============ 引导向导 ============
+
+let onboardingStep = 1;
+let onboardingData = {
+  provider: null,
+  apiBase: "",
+  apiKey: "",
+  defaultModel: "",
+  strongModel: "",
+};
+
+const onboardingSteps = [
+  { title: "欢迎使用 Beacon", subtitle: "让我们花几分钟完成初始配置" },
+  { title: "环境检测", subtitle: "检查运行所需依赖是否已安装" },
+  { title: "选择 API 提供商", subtitle: "选择你的 LLM 服务提供商" },
+  { title: "API 密钥 & 端点配置", subtitle: "填写 API 密钥和访问端点" },
+  { title: "模型选择 & 连接测试", subtitle: "选择模型并验证连接" },
+  { title: "配置完成", subtitle: "一切就绪，可以开始使用了" },
+];
+
+function showOnboarding() {
+  onboardingOverlay.hidden = false;
+  onboardingStep = 1;
+  renderOnboardingStep();
+}
+
+function hideOnboarding() {
+  onboardingOverlay.hidden = true;
+}
+
+function updateStepDots() {
+  stepDots.forEach((dot, i) => {
+    dot.classList.toggle("active", i + 1 === onboardingStep);
+    dot.classList.toggle("done", i + 1 < onboardingStep);
+  });
+}
+
+function renderOnboardingStep() {
+  const step = onboardingSteps[onboardingStep - 1];
+  onboardingTitle.textContent = step.title;
+  onboardingSubtitle.textContent = step.subtitle;
+  updateStepDots();
+  onboardingPrev.disabled = onboardingStep === 1;
+  onboardingNext.textContent = onboardingStep === 5 ? "进入工作台" : "下一步";
+
+  if (onboardingStep === 1) renderEnvCheckStep();
+  else if (onboardingStep === 2) renderProviderStep();
+  else if (onboardingStep === 3) renderApiKeyStep();
+  else if (onboardingStep === 4) renderModelTestStep();
+  else if (onboardingStep === 5) renderCompleteStep();
+}
+
+async function renderEnvCheckStep() {
+  onboardingBody.innerHTML = `
+    <h3>环境检测</h3>
+    <p>正在检测运行所需依赖...</p>
+    <div class="env-check-list" id="envCheckList"></div>
+  `;
+  try {
+    const data = await api("/api/env/check");
+    const list = document.querySelector("#envCheckList");
+    list.innerHTML = renderEnvItem("Python", "≥ 3.11", data.python) +
+      renderEnvItem("Node.js", "≥ 18", data.node) +
+      renderEnvItem("uv", "Python 包管理器", data.uv);
+    onboardingNext.disabled = !data.allOk;
+    if (!data.allOk) {
+      list.querySelectorAll(".env-install-btn").forEach((btn) => {
+        btn.addEventListener("click", () => installTool(btn.dataset.tool, btn));
+      });
+    }
+  } catch (error) {
+    onboardingBody.innerHTML = `<p>检测失败: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderEnvItem(name, requirement, info) {
+  const ok = info.ok;
+  const toolName = name === "Python" ? "python" : name === "Node.js" ? "node" : name === "uv" ? "uv" : "";
+  const status = ok
+    ? `<span class="env-status-ok">✓ ${escapeHtml(info.version)}</span>`
+    : `<span class="env-status-missing">✗ ${info.installed ? escapeHtml(info.version) + " 版本过低" : "未检测到"}</span>`;
+  const actionBtn = ok ? "" : `<button class="env-install-btn" data-tool="${toolName}">一键安装</button>`;
+  return `
+    <div class="env-check-item ${ok ? "ok" : "missing"}">
+      <div>
+        <span class="env-name">${escapeHtml(name)}</span>
+        <span class="env-version">${escapeHtml(requirement)}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        ${status}
+        ${actionBtn}
+      </div>
+    </div>
+  `;
+}
+
+async function installTool(tool, btn) {
+  btn.disabled = true;
+  btn.classList.add("installing");
+  btn.textContent = "安装中...";
+  try {
+    const result = await api("/api/env/install", {
+      method: "POST",
+      body: JSON.stringify({ tool }),
+    });
+    if (result.status === "done") {
+      showToast(`${tool} 安装完成`);
+      renderEnvCheckStep();
+    } else {
+      btn.disabled = false;
+      btn.classList.remove("installing");
+      btn.textContent = "重试";
+      showToast(`${tool} 安装失败: ${result.message}`);
+      if (result.downloadUrl) {
+        onboardingBody.insertAdjacentHTML("beforeend",
+          `<p style="margin-top:12px;color:var(--rose);">手动安装: <a href="${escapeHtml(result.downloadUrl)}" target="_blank">${escapeHtml(result.downloadUrl)}</a></p>`);
+      }
+    }
+  } catch (error) {
+    btn.disabled = false;
+    btn.classList.remove("installing");
+    btn.textContent = "重试";
+    showToast(`安装失败: ${error.message}`);
+  }
+}
+
+async function renderProviderStep() {
+  onboardingNext.disabled = true;
+  onboardingBody.innerHTML = `
+    <h3>选择 API 提供商</h3>
+    <p>选择你的 LLM 服务提供商，选择后会自动填入端点和推荐模型。</p>
+    <div class="provider-grid" id="providerGrid"></div>
+  `;
+  try {
+    const providers = await api("/api/providers");
+    const grid = document.querySelector("#providerGrid");
+    grid.innerHTML = providers.map((p) => `
+      <div class="provider-card" data-provider="${escapeHtml(p.id)}">
+        <strong>${escapeHtml(p.name)}</strong>
+        <span>${escapeHtml(p.description)}</span>
+      </div>
+    `).join("");
+    grid.querySelectorAll(".provider-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        grid.querySelectorAll(".provider-card").forEach((c) => c.classList.remove("selected"));
+        card.classList.add("selected");
+        const provider = providers.find((p) => p.id === card.dataset.provider);
+        onboardingData.provider = provider.id;
+        onboardingData.apiBase = provider.apiBase;
+        onboardingData.defaultModel = provider.defaultModel;
+        onboardingData.strongModel = provider.strongModel;
+        onboardingNext.disabled = false;
+      });
+    });
+  } catch (error) {
+    onboardingBody.innerHTML = `<p>加载提供商列表失败: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderApiKeyStep() {
+  onboardingBody.innerHTML = `
+    <h3>API 密钥 & 端点配置</h3>
+    <p>填写你的 API 密钥。端点已根据所选提供商自动填入，可修改。</p>
+    <div class="field">
+      <span>API 端点（Base URL）</span>
+      <input id="obApiBase" value="${escapeHtml(onboardingData.apiBase)}" placeholder="https://api.deepseek.com/v1" style="width:100%;height:42px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;color:var(--ink);background:var(--white);outline:0;" />
+    </div>
+    <div class="field">
+      <span>API 密钥</span>
+      <div style="display:flex;gap:8px;">
+        <input id="obApiKey" type="password" value="${escapeHtml(onboardingData.apiKey)}" placeholder="sk-..." style="flex:1;height:42px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;color:var(--ink);background:var(--white);outline:0;" />
+        <button class="ghost-button" type="button" id="obToggleKey">👁 显示</button>
+      </div>
+    </div>
+  `;
+  const apiBaseInput = document.querySelector("#obApiBase");
+  const apiKeyInput = document.querySelector("#obApiKey");
+  const toggleBtn = document.querySelector("#obToggleKey");
+
+  apiBaseInput.addEventListener("input", () => { onboardingData.apiBase = apiBaseInput.value; });
+  apiKeyInput.addEventListener("input", () => { onboardingData.apiKey = apiKeyInput.value; });
+  toggleBtn.addEventListener("click", () => {
+    if (apiKeyInput.type === "password") {
+      apiKeyInput.type = "text";
+      toggleBtn.textContent = "👁 隐藏";
+    } else {
+      apiKeyInput.type = "password";
+      toggleBtn.textContent = "👁 显示";
+    }
+  });
+  onboardingNext.disabled = false;
+}
+
+function renderModelTestStep() {
+  onboardingBody.innerHTML = `
+    <h3>模型选择 & 连接测试</h3>
+    <p>选择主力模型和强力模型，然后测试连接。</p>
+    <div class="field">
+      <span>主力模型（编码、灵敏度分析）</span>
+      <input id="obDefaultModel" value="${escapeHtml(onboardingData.defaultModel)}" style="width:100%;height:42px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;color:var(--ink);background:var(--white);outline:0;" />
+    </div>
+    <div class="field">
+      <span>强力模型（分析、建模、写作、评审）</span>
+      <input id="obStrongModel" value="${escapeHtml(onboardingData.strongModel)}" style="width:100%;height:42px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;color:var(--ink);background:var(--white);outline:0;" />
+    </div>
+    <button class="primary-button" type="button" id="obTestBtn">🔍 测试连接</button>
+    <div id="obTestResult"></div>
+  `;
+  const dmInput = document.querySelector("#obDefaultModel");
+  const smInput = document.querySelector("#obStrongModel");
+  dmInput.addEventListener("input", () => { onboardingData.defaultModel = dmInput.value; });
+  smInput.addEventListener("input", () => { onboardingData.strongModel = smInput.value; });
+
+  document.querySelector("#obTestBtn").addEventListener("click", async () => {
+    const result = document.querySelector("#obTestResult");
+    result.innerHTML = '<p style="color:var(--muted);">测试中...</p>';
+    try {
+      const [r1, r2] = await Promise.all([
+        testLlm(onboardingData.apiBase, onboardingData.apiKey, onboardingData.defaultModel),
+        testLlm(onboardingData.apiBase, onboardingData.apiKey, onboardingData.strongModel),
+      ]);
+      const html = renderTestResult("主力模型", r1) + renderTestResult("强力模型", r2);
+      result.innerHTML = html;
+      onboardingNext.disabled = !(r1.success && r2.success);
+    } catch (error) {
+      result.innerHTML = `<div class="test-result fail">测试失败: ${escapeHtml(error.message)}</div>`;
+    }
+  });
+  onboardingNext.disabled = true;
+}
+
+async function testLlm(apiBase, apiKey, model) {
+  return await api("/api/config/test-llm", {
+    method: "POST",
+    body: JSON.stringify({ apiBase, apiKey, model }),
+  });
+}
+
+function renderTestResult(label, result) {
+  const cls = result.success ? "ok" : "fail";
+  const text = result.success
+    ? `✓ ${escapeHtml(label)} 连接成功 · ${result.latency_ms}ms`
+    : `✗ ${escapeHtml(label)} 失败: ${escapeHtml(result.error || "未知错误")}`;
+  return `<div class="test-result ${cls}">${text}</div>`;
+}
+
+async function renderCompleteStep() {
+  // 保存配置
+  try {
+    await api("/api/config", {
+      method: "POST",
+      body: JSON.stringify({
+        apiBase: onboardingData.apiBase,
+        apiKey: onboardingData.apiKey,
+        defaultModel: onboardingData.defaultModel,
+        strongModel: onboardingData.strongModel,
+      }),
+    });
+  } catch (error) {
+    showToast(`保存配置失败: ${error.message}`);
+  }
+
+  onboardingBody.innerHTML = `
+    <div style="text-align:center;padding:20px 0;">
+      <div style="font-size:48px;margin-bottom:12px;">🎉</div>
+      <h3 style="color:var(--green);">配置完成！</h3>
+      <p>配置已自动保存到 .env 文件</p>
+      <div style="margin:16px auto;padding:14px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;text-align:left;font-size:0.86rem;max-width:400px;">
+        <p><strong>端点:</strong> ${escapeHtml(onboardingData.apiBase)}</p>
+        <p><strong>主力模型:</strong> ${escapeHtml(onboardingData.defaultModel)}</p>
+        <p><strong>强力模型:</strong> ${escapeHtml(onboardingData.strongModel)}</p>
+      </div>
+    </div>
+  `;
+}
+
+onboardingPrev?.addEventListener("click", () => {
+  if (onboardingStep > 1) {
+    onboardingStep--;
+    renderOnboardingStep();
+  }
+});
+
+onboardingNext?.addEventListener("click", () => {
+  if (onboardingStep < 5) {
+    onboardingStep++;
+    renderOnboardingStep();
+  } else {
+    hideOnboarding();
+    showToast("配置完成，欢迎使用 Beacon！");
+  }
+});
+
+// ============ 设置页面 ============
+
+let settingsTab = "api";
+let settingsConfig = null;
+
+async function loadSettings() {
+  try {
+    settingsConfig = await api("/api/config");
+    renderSettings();
+  } catch (error) {
+    settingsContent.innerHTML = `<p>加载配置失败: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderSettings() {
+  if (!settingsConfig) return;
+  if (settingsTab === "api") renderSettingsApi();
+  else if (settingsTab === "models") renderSettingsModels();
+  else if (settingsTab === "rag") renderSettingsRag();
+  else if (settingsTab === "advanced") renderSettingsAdvanced();
+}
+
+function renderSettingsApi() {
+  settingsContent.innerHTML = `
+    <div class="field">
+      <span>API 端点</span>
+      <input id="setApiBase" value="${escapeHtml(settingsConfig.apiBase)}" />
+      <span class="field-hint">OpenAI 兼容端点地址</span>
+    </div>
+    <div class="field">
+      <span>API 密钥</span>
+      <div style="display:flex;gap:8px;">
+        <input id="setApiKey" type="password" value="${escapeHtml(settingsConfig.apiKey)}" style="flex:1;" />
+        <button class="ghost-button" type="button" id="setToggleKey">👁 显示</button>
+        <button class="primary-button" type="button" id="setTestBtn">🔍 测试</button>
+      </div>
+      <div id="setTestResult"></div>
+    </div>
+  `;
+  document.querySelector("#setToggleKey")?.addEventListener("click", (e) => {
+    const input = document.querySelector("#setApiKey");
+    if (input.type === "password") { input.type = "text"; e.target.textContent = "👁 隐藏"; }
+    else { input.type = "password"; e.target.textContent = "👁 显示"; }
+  });
+  document.querySelector("#setTestBtn")?.addEventListener("click", async () => {
+    const apiBase = document.querySelector("#setApiBase").value;
+    const apiKey = document.querySelector("#setApiKey").value;
+    const model = settingsConfig.defaultModel || "test";
+    const result = document.querySelector("#setTestResult");
+    result.innerHTML = '<p class="field-hint">测试中...</p>';
+    try {
+      const r = await testLlm(apiBase, apiKey.includes("***") ? "" : apiKey, model);
+      result.innerHTML = r.success
+        ? `<div class="test-result ok">✓ 连接成功 · ${r.latency_ms}ms</div>`
+        : `<div class="test-result fail">✗ ${escapeHtml(r.error)}</div>`;
+    } catch (error) {
+      result.innerHTML = `<div class="test-result fail">✗ ${escapeHtml(error.message)}</div>`;
+    }
+  });
+}
+
+function renderSettingsModels() {
+  settingsContent.innerHTML = `
+    <div class="field">
+      <span>主力模型（编码、灵敏度分析）</span>
+      <input id="setDefaultModel" value="${escapeHtml(settingsConfig.defaultModel)}" />
+      <span class="field-hint">用于 routine 节点，格式：provider/model</span>
+    </div>
+    <div class="field">
+      <span>强力模型（分析、建模、写作、评审）</span>
+      <input id="setStrongModel" value="${escapeHtml(settingsConfig.strongModel)}" />
+      <span class="field-hint">用于核心节点</span>
+    </div>
+  `;
+}
+
+function renderSettingsRag() {
+  settingsContent.innerHTML = `
+    <div class="toggle-row">
+      <div>
+        <strong>启用 RAG 知识库</strong>
+        <p class="field-hint">启用后注入经典模型模式到提示词</p>
+      </div>
+      <div class="toggle-switch ${settingsConfig.ragEnabled ? "on" : ""}" id="setRagToggle"></div>
+    </div>
+    <div class="field">
+      <span>Embedding 模型</span>
+      <input id="setRagEmbed" value="${escapeHtml(settingsConfig.ragEmbeddingModel)}" />
+    </div>
+    <div class="field">
+      <span>检索 Top-K</span>
+      <input id="setRagTopK" type="number" value="${settingsConfig.ragTopK}" />
+    </div>
+  `;
+  document.querySelector("#setRagToggle")?.addEventListener("click", (e) => {
+    e.currentTarget.classList.toggle("on");
+  });
+}
+
+function renderSettingsAdvanced() {
+  settingsContent.innerHTML = `
+    <div class="field">
+      <span>模型迭代轮次上限</span>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <input id="setIterations" type="range" min="1" max="5" value="${settingsConfig.maxModelIterations}" style="flex:1;" />
+        <span id="setIterationsVal" style="font-weight:700;color:var(--blue);">${settingsConfig.maxModelIterations}</span>
+      </div>
+    </div>
+    <div class="field">
+      <span>LLM 超时（秒）</span>
+      <input id="setLlmTimeout" type="number" value="${settingsConfig.llmTimeout}" />
+    </div>
+    <div class="field">
+      <span>前端端口</span>
+      <input id="setPort" type="number" value="${settingsConfig.port}" />
+      <span class="field-hint">修改后需重启服务生效</span>
+    </div>
+  `;
+  document.querySelector("#setIterations")?.addEventListener("input", (e) => {
+    document.querySelector("#setIterationsVal").textContent = e.target.value;
+  });
+}
+
+function collectSettings() {
+  const config = {};
+  const apiBase = document.querySelector("#setApiBase");
+  const apiKey = document.querySelector("#setApiKey");
+  const defaultModel = document.querySelector("#setDefaultModel");
+  const strongModel = document.querySelector("#setStrongModel");
+  const ragToggle = document.querySelector("#setRagToggle");
+  const ragEmbed = document.querySelector("#setRagEmbed");
+  const ragTopK = document.querySelector("#setRagTopK");
+  const iterations = document.querySelector("#setIterations");
+  const llmTimeout = document.querySelector("#setLlmTimeout");
+  const port = document.querySelector("#setPort");
+
+  if (apiBase) config.apiBase = apiBase.value;
+  if (apiKey && !apiKey.value.includes("***")) config.apiKey = apiKey.value;
+  if (defaultModel) config.defaultModel = defaultModel.value;
+  if (strongModel) config.strongModel = strongModel.value;
+  if (ragToggle) config.ragEnabled = ragToggle.classList.contains("on");
+  if (ragEmbed) config.ragEmbeddingModel = ragEmbed.value;
+  if (ragTopK) config.ragTopK = Number(ragTopK.value);
+  if (iterations) config.maxModelIterations = Number(iterations.value);
+  if (llmTimeout) config.llmTimeout = Number(llmTimeout.value);
+  if (port) config.port = Number(port.value);
+  return config;
+}
+
+settingsNavButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    settingsNavButtons.forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    settingsTab = btn.dataset.settingsTab;
+    renderSettings();
+  });
+});
+
+settingsSave?.addEventListener("click", async () => {
+  try {
+    const config = collectSettings();
+    await api("/api/config", { method: "POST", body: JSON.stringify(config) });
+    showToast("配置已保存");
+    await loadSettings();
+  } catch (error) {
+    showToast(`保存失败: ${error.message}`);
+  }
+});
+
+settingsReset?.addEventListener("click", async () => {
+  if (!confirm("确定要重置为默认值吗？")) return;
+  try {
+    await api("/api/config", {
+      method: "POST",
+      body: JSON.stringify({
+        apiBase: "http://localhost:20128/v1",
+        apiKey: "123456",
+        defaultModel: "deepseek-v4-flash-free",
+        strongModel: "deepseek-v4-flash-free",
+        llmTimeout: 300,
+        maxModelIterations: 3,
+        ragEnabled: false,
+        ragEmbeddingModel: "text-embedding-3-small",
+        ragTopK: 4,
+        port: 5173,
+      }),
+    });
+    showToast("已重置为默认值");
+    await loadSettings();
+  } catch (error) {
+    showToast(`重置失败: ${error.message}`);
+  }
+});
+
+// 设置页面导航
+document.querySelectorAll(".nav-list a").forEach((link) => {
+  link.addEventListener("click", (e) => {
+    if (link.getAttribute("href") === "#settings") {
+      e.preventDefault();
+      document.querySelectorAll(".nav-list a").forEach((l) => l.classList.remove("active"));
+      link.classList.add("active");
+      document.querySelector("#workspace").style.display = "none";
+      settingsPanel.hidden = false;
+      loadSettings();
+    } else {
+      document.querySelector("#workspace").style.display = "";
+      settingsPanel.hidden = true;
+    }
+  });
+});
 
 
