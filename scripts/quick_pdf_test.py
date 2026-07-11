@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""快速验证 PDF 编译链路：mock state → table_assembler → latex → PDF。
+r"""快速验证 PDF 编译链路：mock state → table_assembler → latex → PDF。
 
 不跑 graph、不调 LLM。用含 LaTeX 命令（\tau \text \beta \bigl \bar \boldsymbol）
 的真实风格 paper 文本，验证：
@@ -19,6 +19,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from math_agent.state import (
@@ -26,7 +30,7 @@ from math_agent.state import (
     FigureArtifact, SensitivityRun, Assumption, DerivationStep,
 )
 from math_agent.nodes.table_assembler import table_assembler_node
-from math_agent.nodes.latex import latex_node
+from math_agent.nodes.latex_node import latex_node
 
 
 def build_mock_state(output_dir: str) -> MathModelingState:

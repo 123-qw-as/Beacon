@@ -88,7 +88,7 @@ def _setup_upstream_mocks(mocker, workdir):
                      assumption_reasonableness=8, modeling_creativity=8,
                      result_correctness=8, writing_clarity=8, extra_depth=8, overall=8.0,
                  ))
-    mocker.patch("math_agent.nodes.latex.compile_latex",
+    mocker.patch("math_agent.nodes.latex_node.compile_latex",
                  return_value=type("R",(object,),{"success": True, "pdf_path":"", "log":""})())
 
 

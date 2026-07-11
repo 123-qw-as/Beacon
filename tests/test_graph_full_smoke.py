@@ -106,7 +106,7 @@ def _setup_all_mocks(mocker, workdir):
                  ))
 
     # latex compile —— 不依赖系统 xelatex
-    mocker.patch("math_agent.nodes.latex.compile_latex",
+    mocker.patch("math_agent.nodes.latex_node.compile_latex",
                  return_value=type("R",(object,),{"success": True, "pdf_path":"", "log":""})())
 
 
@@ -135,3 +135,18 @@ def test_full_pipeline_with_hitl_interrupt_and_resume(mocker, workdir):
 
     assert (workdir / "paper.tex").exists()
     assert (workdir / "paper.md").exists()
+
+
+def test_full_pipeline_rejection_stops_before_latex(mocker, workdir):
+    from langgraph.checkpoint.memory import MemorySaver
+    _setup_all_mocks(mocker, workdir)
+
+    saver = MemorySaver()
+    g = build_graph(checkpointer=saver, interrupt_before=["human_review"])
+    config = {"configurable": {"thread_id": "reject"}}
+    g.invoke({"problem": "p", "output_dir": str(workdir)}, config=config)
+    g.update_state(config, {"human_decision": HumanDecision(approved=False, notes="需修改")})
+    g.invoke(None, config=config)
+
+    assert not (workdir / "paper.tex").exists()
+    assert not (workdir / "paper.md").exists()

@@ -80,6 +80,34 @@ def test_extract_pdf_text_uses_pymupdf_no_box_chars(tmp_path):
     assert "\ufffd" not in result
 
 
+def test_extract_pdf_text_reconstructs_superscripts(tmp_path):
+    """Regression: 2² was extracted as '22' (ambiguous). Now font-size analysis
+    detects superscripts and wraps them as ^{...}, so 2² becomes '2^{2}'."""
+    import fitz
+
+    pdf_path = tmp_path / "sup_test.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    # 用 insert_text 模拟上标：基线 size=12，上标 size=7 y 偏移小
+    page.insert_text((72, 72), "2", fontsize=12)
+    page.insert_text((80, 69), "2", fontsize=7)   # 上标，y 仅偏移 3
+    page.insert_text((88, 72), " = 4", fontsize=12)
+    page.insert_text((72, 100), "3", fontsize=12)
+    page.insert_text((80, 97), "3", fontsize=7)   # 上标
+    page.insert_text((88, 100), " = 27", fontsize=12)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    result = _extract_pdf_text(pdf_path)
+    # 2² 应还原为 2^{2}，而不是 22
+    assert "2^{2}" in result
+    # 3³ 应还原为 3^{3}，而不是 33
+    assert "3^{3}" in result
+    # 不应出现裸的 22= 或 33=
+    assert "22=" not in result.replace(" ", "")
+    assert "33=" not in result.replace(" ", "")
+
+
 def test_ingest_directory_is_idempotent_on_rerun(mocker, workdir):
     """同一 corpus 跑两次：第二次 chunks_added==0，DB 内 chunk 数不变。"""
     corpus = workdir / "corpus"

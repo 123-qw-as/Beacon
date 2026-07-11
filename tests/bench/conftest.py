@@ -120,7 +120,7 @@ def _setup_mocks(stack: ExitStack, *, paper: PaperSections,
     _patch("math_agent.nodes.evaluation.complete",
            side_effect=itertools.cycle([evaluation]))
 
-    _patch("math_agent.nodes.latex.compile_latex",
+    _patch("math_agent.nodes.latex_node.compile_latex",
            return_value=type("R", (object,), {
                "success": True, "pdf_path": "", "log": "", "error_kind": "",
            })())

@@ -169,7 +169,7 @@ def run_plan_d_e2e(workdir: Path) -> dict:
 
         # latex
         stack.enter_context(patch(
-            "math_agent.nodes.latex.compile_latex",
+            "math_agent.nodes.latex_node.compile_latex",
             return_value=type("R", (object,),
                               {"success": True, "pdf_path": "", "log": "",
                                "error_kind": ""})()))

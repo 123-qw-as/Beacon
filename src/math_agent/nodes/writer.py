@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import quote
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -51,7 +52,8 @@ def writer_node(state: MathModelingState) -> dict:
             model=MODEL_ROUTING["writer"],
         )
     else:
-        outline = WriterOutline()
+        # 重试跳过新的大纲调用，但必须复用首轮大纲，不能把锚点清空。
+        outline = WriterOutline(**state.writer_outline_dump)
 
     # ---- 决定本轮要重跑的分组 ----
     if state.writer_iteration > 0 and prior_critic is not None and prior_critic.issues:
@@ -117,7 +119,7 @@ _env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=select_aut
 
 
 def render_markdown(state: MathModelingState) -> str:
-    from math_agent.nodes.latex import _curate_code, _curate_stdout
+    from math_agent.nodes.rendering import _curate_code, _curate_stdout
     tmpl = _env.get_template("paper.md.j2")
     curated = [
         {
@@ -126,12 +128,18 @@ def render_markdown(state: MathModelingState) -> str:
             "curated_code": _curate_code(a.code),
             "curated_stdout": _curate_stdout(a.stdout),
         }
-        for a in state.code_artifacts if a.success
+        for a in state.latest_code_artifacts() if a.success
+    ]
+    markdown_figures = [
+        figure.model_copy(update={
+            "path": quote(figure.path.replace("\\", "/"), safe="/:"),
+        })
+        for figure in state.figures
     ]
     return tmpl.render(
         problem=state.problem,
         paper=state.paper,
         code_artifacts=curated,
-        figures=state.figures,
+        figures=markdown_figures,
         sensitivity_runs=state.sensitivity_runs,
     )

@@ -16,11 +16,11 @@ from math_agent.nodes.writer import writer_node, writer_section_node
 from math_agent.nodes.paper_critic import paper_critic_node
 from math_agent.nodes.evaluation import evaluation_node
 from math_agent.nodes.human_review import human_review_node
-from math_agent.nodes.latex import latex_node
+from math_agent.nodes.latex_node import latex_node
 from math_agent.nodes.table_assembler import table_assembler_node
 from math_agent.routing import (
     after_blueprint_critic, after_model_critic, after_paper_critic,
-    after_writer_step, after_model_code_consistency,
+    after_writer_step, after_model_code_consistency, after_human_review,
 )
 
 
@@ -32,14 +32,21 @@ def _wrap(fn, name: str):
     """如当前 contextvar 上有 Tracer，按节点名打点；没有则原样调用。
     同时设置 _last_node_name contextvar 供 CLI 报错时显示当前节点。"""
     def _inner(s):
-        from math_agent.tracing import get_current, set_last_node, reset_last_node
+        from math_agent.tracing import (
+            get_current, set_last_node, reset_last_node, record_failed_node,
+        )
         tok = set_last_node(name)
         try:
+            print(f"[pipeline] node: {name}", flush=True)
             tracer = get_current()
             if tracer is not None:
                 with tracer.node(name):
                     return fn(s)
             return fn(s)
+        except BaseException:
+            # 活跃节点 contextvar 会在 finally 中恢复；另存失败节点供 CLI 报错。
+            record_failed_node(name)
+            raise
         finally:
             reset_last_node(tok)
     _inner.__name__ = fn.__name__
@@ -107,11 +114,15 @@ def build_graph(
     g.add_conditional_edges(
         "paper_critic",
         after_paper_critic,
-        {"retry": "writer", "advance": "table_assembler"},
+        {"retry": "writer", "advance": "table_assembler", "stop": END},
     )
     g.add_edge("table_assembler", "evaluation")
     g.add_edge("evaluation", "human_review")
-    g.add_edge("human_review", "latex")
+    g.add_conditional_edges(
+        "human_review",
+        after_human_review,
+        {"finalize": "latex", "stop": END},
+    )
     g.add_edge("latex", END)
     return g.compile(
         checkpointer=checkpointer,

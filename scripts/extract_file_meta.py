@@ -48,16 +48,40 @@ def _meta_csv(path: Path) -> dict:
                          "columns": columns, "preview": preview}]}
 
 
+def _extract_page_with_superscripts(page) -> str:
+    """用版面信息检测上标：字号明显小于基线 + y 坐标更高时，包裹为 ^{...}。
+    避免 2² 被提取为 22 造成歧义。"""
+    blocks = page.get_text("dict")["blocks"]
+    lines_out = []
+    for block in blocks:
+        for line in block.get("lines", []):
+            spans = [s for s in line.get("spans", []) if s["text"].strip()]
+            if not spans:
+                continue
+            sizes = [round(s["size"], 1) for s in spans]
+            baseline_size = max(set(sizes), key=sizes.count)
+            parts = []
+            for span in spans:
+                text = span["text"]
+                size = round(span["size"], 1)
+                if size < baseline_size - 1.5:
+                    parts.append(f"^{{{text}}}")
+                else:
+                    parts.append(text)
+            lines_out.append("".join(parts))
+    return "\n".join(lines_out)
+
+
 def _meta_pdf(path: Path) -> dict:
     # 优先使用 PyMuPDF (fitz)，其对数学符号/CID 字体的解码远优于 pypdf
     try:
         import fitz  # pymupdf
         doc = fitz.open(str(path))
-        raw = "\n\n".join(page.get_text() or "" for page in doc)
+        raw = "\n\n".join(_extract_page_with_superscripts(page) for page in doc)
         total_pages = len(doc)
         doc.close()
     except ImportError:
-        # 降级到 pypdf（数学符号可能显示为方框）
+        # 降级到 pypdf（数学符号可能显示为方框，上标会丢失）
         from pypdf import PdfReader
         reader = PdfReader(str(path))
         raw = "\n\n".join(page.extract_text() or "" for page in reader.pages)
