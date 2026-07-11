@@ -484,6 +484,27 @@ async function handleApi(request, response, url) {
     await mkdir(runDir, { recursive: true });
     await mkdir(outDir, { recursive: true });
 
+    // 附件复制到 run 专属 data 目录
+    let dataDir = "";
+    let dataFiles = [];
+    if (Array.isArray(body.attachments) && body.attachments.length) {
+      const dataDirPath = resolve(runDir, "data");
+      await mkdir(dataDirPath, { recursive: true });
+      for (const att of body.attachments) {
+        if (!att.storedPath) continue;
+        const src = safeProjectPath(att.storedPath);
+        const dst = resolve(dataDirPath, att.filename);
+        await writeFile(dst, await readFile(src));
+        dataFiles.push({
+          filename: att.filename,
+          file_type: att.fileType,
+          path: att.filename,
+          summary: att.summary || {},
+        });
+      }
+      dataDir = dataDirPath;
+    }
+
     const problemPath = resolve(runDir, "problem.json");
     const problem = {
       title: body.title || "Beacon UI Problem",
@@ -495,6 +516,10 @@ async function handleApi(request, response, url) {
         .slice(0, 6),
     };
     if (problem.questions.length === 0) problem.questions = [body.title || "请完成数学建模分析。"];
+    if (dataDir) {
+      problem.data_dir = dataDir;
+      problem.data_files = dataFiles;
+    }
     await writeFile(problemPath, JSON.stringify(problem, null, 2), "utf8");
 
     const commandParts = splitCommandLine(env.MATH_AGENT_COMMAND || "uv run math-agent");

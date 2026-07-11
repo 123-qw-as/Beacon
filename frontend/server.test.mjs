@@ -127,3 +127,45 @@ test("POST /api/upload 拒绝不支持的文件类型", async () => {
   });
   assert.equal(response.status, 415);
 });
+
+test("POST /api/run 接受 attachments 并写入 problem.json", async () => {
+  // 先上传一个文件
+  const boundary = "----testboundary777";
+  const csvContent = "a,b\n1,2\n";
+  const uploadBody = [
+    `--${boundary}\r\n`,
+    `Content-Disposition: form-data; name="purpose"\r\n\r\n`,
+    `attachment\r\n`,
+    `--${boundary}\r\n`,
+    `Content-Disposition: form-data; name="file"; filename="data.csv"\r\n\r\n`,
+    csvContent,
+    `\r\n--${boundary}--\r\n`,
+  ].join("");
+  const uploadRes = await fetch(`${base}/api/upload`, {
+    method: "POST",
+    headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+    body: uploadBody,
+  });
+  const uploadData = await uploadRes.json();
+
+  // 启动 run
+  const runRes = await fetch(`${base}/api/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "test",
+      background: "test bg",
+      outputDir: "runs/ui-test-attachments",
+      threadId: "test-att",
+      noInterrupt: true,
+      ragEnabled: false,
+      attachments: [uploadData],
+    }),
+  });
+  assert.equal(runRes.status, 202);
+  const runJson = await runRes.json();
+  assert.ok(runJson.run.id);
+
+  // 清理：stop the run
+  await fetch(`${base}/api/runs/${runJson.run.id}/stop`, { method: "POST" });
+});
