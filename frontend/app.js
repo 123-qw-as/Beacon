@@ -45,6 +45,9 @@ const settingsContent = document.querySelector("#settingsContent");
 const settingsSave = document.querySelector("#settingsSave");
 const settingsReset = document.querySelector("#settingsReset");
 const settingsNavButtons = document.querySelectorAll("[data-settings-tab]");
+const dashboardSections = document.querySelectorAll(
+  "#workspace > .topbar, #workspace > .status-strip, #workspace > .layout-grid",
+);
 
 const stages = ["Analyst", "Blueprint Critic", "Modeler", "Model Critic", "Coder", "Code Consistency", "Sensitivity", "Figure Pipeline", "Writer", "Paper Critic", "Table Assembler", "Evaluation", "Human Review", "LaTeX"];
 const stageLogNames = ["analyst", "blueprint_critic", "modeler", "model_critic", "coder", "model_code_consistency", "sensitivity", "figure_pipeline", "writer", "paper_critic", "table_assembler", "evaluation", "human_review", "latex"];
@@ -140,6 +143,7 @@ function updateCommand() {
 
 function activateNav(hash) {
   navLinks.forEach((link) => link.classList.toggle("active", link.getAttribute("href") === hash));
+  setSettingsView(hash === "#settings");
 }
 
 async function loadFixturesIntoProblem() {
@@ -518,7 +522,11 @@ tabButtons.forEach((button) => {
   });
 });
 
-navLinks.forEach((link) => link.addEventListener("click", () => activateNav(link.getAttribute("href"))));
+navLinks.forEach((link) => link.addEventListener("click", () => {
+  const hash = link.getAttribute("href");
+  activateNav(hash);
+  if (hash === "#settings") loadSettings();
+}));
 [problemTitle, problemBrief].forEach((control) => {
   control?.addEventListener("input", () => { currentFixturePath = null; });
 });
@@ -661,7 +669,11 @@ attachmentZone?.addEventListener("drop", (event) => {
   }
 });
 
-window.addEventListener("hashchange", () => activateNav(window.location.hash || "#workspace"));
+window.addEventListener("hashchange", () => {
+  const hash = window.location.hash || "#workspace";
+  activateNav(hash);
+  if (hash === "#settings") loadSettings();
+});
 activateNav(window.location.hash || "#workspace");
 updatePipeline();
 updateCommand();
@@ -1163,20 +1175,12 @@ settingsReset?.addEventListener("click", async () => {
 });
 
 // 设置页面导航
-document.querySelectorAll(".nav-list a").forEach((link) => {
-  link.addEventListener("click", (e) => {
-    if (link.getAttribute("href") === "#settings") {
-      e.preventDefault();
-      document.querySelectorAll(".nav-list a").forEach((l) => l.classList.remove("active"));
-      link.classList.add("active");
-      document.querySelector("#workspace").style.display = "none";
-      settingsPanel.hidden = false;
-      loadSettings();
-    } else {
-      document.querySelector("#workspace").style.display = "";
-      settingsPanel.hidden = true;
-    }
+function setSettingsView(isSettingsView) {
+  dashboardSections.forEach((section) => {
+    section.hidden = isSettingsView;
   });
-});
+  settingsPanel.hidden = !isSettingsView;
+}
 
+if (window.location.hash === "#settings") loadSettings();
 
