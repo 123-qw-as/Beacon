@@ -8,6 +8,8 @@ from math_agent.state import (
     PaperSections,
     SensitivityRun,
     FigureArtifact,
+    DataFileInfo,
+    DataFileSheet,
 )
 
 
@@ -167,3 +169,52 @@ def test_state_with_problem_still_works():
     """problem 显式传入应正常保留值。"""
     s = MathModelingState(problem="共享单车调度问题")
     assert s.problem == "共享单车调度问题"
+
+
+def test_scores_reject_values_outside_zero_to_ten():
+    import pytest
+    from pydantic import ValidationError
+    from math_agent.state import EvaluationReport, ModelCodeConsistencyReport
+
+    with pytest.raises(ValidationError):
+        CriticReport(target="paper", score=11)
+    with pytest.raises(ValidationError):
+        ModelCodeConsistencyReport(score=-1, approved=False)
+    with pytest.raises(ValidationError):
+        EvaluationReport(
+            assumption_reasonableness=8, modeling_creativity=8,
+            result_correctness=8, writing_clarity=8, extra_depth=12, overall=8,
+        )
+
+
+def test_latest_code_artifacts_filters_old_batches():
+    from math_agent.state import CodeArtifact
+    state = MathModelingState(problem="p", code_artifacts=[
+        CodeArtifact(purpose="old", code="", batch=1),
+        CodeArtifact(purpose="new-a", code="", batch=2),
+        CodeArtifact(purpose="new-b", code="", batch=2),
+    ])
+    assert [a.purpose for a in state.latest_code_artifacts()] == ["new-a", "new-b"]
+
+
+def test_state_accepts_data_files():
+    s = MathModelingState(
+        problem="x",
+        data_dir="/tmp/data",
+        data_files=[DataFileInfo(filename="orders.xlsx", file_type="xlsx", path="orders.xlsx")],
+    )
+    assert s.data_dir == "/tmp/data"
+    assert len(s.data_files) == 1
+    assert s.data_files[0].filename == "orders.xlsx"
+
+
+def test_state_defaults_no_data_files():
+    s = MathModelingState(problem="x")
+    assert s.data_dir is None
+    assert s.data_files == []
+
+
+def test_data_file_sheet_model():
+    sheet = DataFileSheet(name="Sheet1", rows=100, cols=3, columns=["a", "b", "c"])
+    assert sheet.rows == 100
+    assert sheet.preview == []

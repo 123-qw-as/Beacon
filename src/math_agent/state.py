@@ -73,6 +73,23 @@ class DataRequirement(BaseModel):
     handling_strategy: str = ""
 
 
+class DataFileSheet(BaseModel):
+    """xlsx/csv 的单个 sheet/表摘要。"""
+    name: str
+    rows: int = 0
+    cols: int = 0
+    columns: list[str] = Field(default_factory=list)
+    preview: list[list[str]] = Field(default_factory=list)
+
+
+class DataFileInfo(BaseModel):
+    """上传附件的元信息，供 analyst/coder 理解数据。"""
+    filename: str
+    file_type: str                           # "xlsx"|"csv"|"pdf"|"docx"|"txt"|"md"
+    path: str                                # 相对 data_dir 的文件名
+    summary: dict = Field(default_factory=dict)  # 灵活 dict，不同类型结构不同
+
+
 class ModelingCandidate(BaseModel):
     name: str
     route: str
@@ -81,7 +98,7 @@ class ModelingCandidate(BaseModel):
     pros: list[str] = Field(default_factory=list)
     cons: list[str] = Field(default_factory=list)
     risk: str = ""
-    recommendation_score: int = 0
+    recommendation_score: int = Field(default=0, ge=0, le=10)
 
 
 class RecommendedRoute(BaseModel):
@@ -181,7 +198,7 @@ class CriticIssue(BaseModel):
 
 class CriticReport(BaseModel):
     target: Literal["analyst", "modeler", "coder", "writer", "paper"]
-    score: int  # 0-10
+    score: int = Field(ge=0, le=10)
     issues: list[CriticIssue] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
     approved: bool = False
@@ -199,7 +216,7 @@ class ModelCodeConsistencyReport(BaseModel):
    （implemented_variables、missing_constraints 等），这些结构化字段无法无损嵌入
     CriticReport 的通用 issues/suggestions 列表。
     """
-    score: int
+    score: int = Field(ge=0, le=10)
     approved: bool
     implemented_variables: list[str] = Field(default_factory=list)
     missing_variables: list[str] = Field(default_factory=list)
@@ -225,19 +242,19 @@ class FigureArtifact(BaseModel):
     path: str
     purpose: str
     caption: str = ""
-    quality_score: int = 0           # 0-10，FigureCritic 打分
+    quality_score: int = Field(default=0, ge=0, le=10)
     quality_issues: list[str] = Field(default_factory=list)
     analysis: str = ""               # FigureAnalyst 产出的段落
 
 
 class EvaluationReport(BaseModel):
     """对齐国赛四大标准 + 国一加分项。每项 0-10。"""
-    assumption_reasonableness: int
-    modeling_creativity: int
-    result_correctness: int
-    writing_clarity: int
-    extra_depth: int                 # 加分项：敏感性/创新/分析深度
-    overall: float                   # 加权总评
+    assumption_reasonableness: int = Field(ge=0, le=10)
+    modeling_creativity: int = Field(ge=0, le=10)
+    result_correctness: int = Field(ge=0, le=10)
+    writing_clarity: int = Field(ge=0, le=10)
+    extra_depth: int = Field(ge=0, le=10)  # 加分项：敏感性/创新/分析深度
+    overall: float = Field(ge=0, le=10)  # 加权总评
     issues: list[str] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
 
@@ -266,8 +283,9 @@ class MathModelingState(BaseModel):
     background: str = ""
     questions: list[str] = Field(default_factory=list)
 
-    # 中间产物（list 字段都是 append 语义）
-    assumptions: Annotated[list[Assumption], add] = Field(default_factory=list)
+    # 当前 Blueprint 的假设（覆盖语义）。analyst 重试后必须替换旧假设，
+    # 否则 modeler/sensitivity 会继续消费被 critic 否决的首轮内容。
+    assumptions: list[Assumption] = Field(default_factory=list)
     model_versions: Annotated[list[ModelVersion], add] = Field(default_factory=list)
     code_artifacts: Annotated[list[CodeArtifact], add] = Field(default_factory=list)
     critic_reports: Annotated[list[CriticReport], add] = Field(default_factory=list)
@@ -306,6 +324,10 @@ class MathModelingState(BaseModel):
     # 输出
     output_dir: Optional[str] = None
 
+    # 附件数据（覆盖语义；run 启动时确定，中途不变）
+    data_dir: Optional[str] = None
+    data_files: list[DataFileInfo] = Field(default_factory=list)
+
     # LaTeX 模板选择 + 队伍信息（仅 gmcm 模板用到）
     latex_template: str = "default"   # "default" | "gmcm"
     school: Optional[str] = None
@@ -315,6 +337,13 @@ class MathModelingState(BaseModel):
     # ---- 便利方法 ----
     def latest_model(self) -> ModelVersion | None:
         return self.model_versions[-1] if self.model_versions else None
+
+    def latest_code_artifacts(self) -> list[CodeArtifact]:
+        """返回最新 coder 批次；旧批次只用于追踪，不应进入论文或图表。"""
+        if not self.code_artifacts:
+            return []
+        latest_batch = max(artifact.batch for artifact in self.code_artifacts)
+        return [artifact for artifact in self.code_artifacts if artifact.batch == latest_batch]
 
     def latest_critic(self, target: str, critic_type: str = "") -> CriticReport | None:
         """返回最新的 target 匹配的 CriticReport。
