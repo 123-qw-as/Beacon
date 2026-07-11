@@ -65,15 +65,16 @@ def test_analyst_outputs_problem_domains(mocker):
     assert delta["problem_domains"] == ["optimization", "queueing"]
 
 
-def test_analyst_skips_assumptions_on_retry(mocker):
-    """blueprint_iteration > 0 时不追加 assumptions，避免重复。"""
-    mocker.patch("math_agent.nodes.analyst.complete",
-                 return_value=_blueprint())
-    s = MathModelingState(problem="p", blueprint_iteration=1)
+def test_analyst_replaces_assumptions_on_retry(mocker):
+    """blueprint_iteration > 0 时同步覆盖 assumptions，不能保留被否决的旧值。"""
+    fresh = _blueprint(assumptions=[Assumption(statement="新假设")])
+    mocker.patch("math_agent.nodes.analyst.complete", return_value=fresh)
+    s = MathModelingState(
+        problem="p", blueprint_iteration=1,
+        assumptions=[Assumption(statement="旧假设")],
+    )
     delta = analyst_node(s)
-    # retry 时不应同步 assumptions（避免追加语义导致重复）
-    assert "assumptions" not in delta
-    # 但 problem_blueprint 和 problem_domains 仍应覆盖
+    assert [a.statement for a in delta["assumptions"]] == ["新假设"]
     assert "problem_blueprint" in delta
     assert "problem_domains" in delta
 
@@ -91,3 +92,30 @@ def test_analyst_injects_critic_feedback(mocker):
     prompt_arg = spy.call_args.args[0]
     assert "遗漏小问2" in prompt_arg
     assert "补充小问2" in prompt_arg
+
+
+def test_analyst_receives_data_files_in_prompt(mocker):
+    from math_agent.state import DataFileInfo
+    from math_agent.prompts.analyst import build_prompt
+
+    state = MathModelingState(
+        problem="城市绿色物流配送",
+        background="",
+        questions=["建立配送调度模型"],
+        data_dir="/tmp/data",
+        data_files=[DataFileInfo(
+            filename="orders.xlsx", file_type="xlsx", path="orders.xlsx",
+            summary={"sheets": [{"name": "Sheet1", "rows": 1200, "cols": 5,
+                                  "columns": ["订单号", "客户ID", "需求量"]}]}
+        )],
+    )
+
+    captured_prompt = {}
+    def fake_complete(prompt, **kwargs):
+        captured_prompt["prompt"] = prompt
+        return _blueprint()
+    mocker.patch("math_agent.nodes.analyst.complete", side_effect=fake_complete)
+
+    analyst_node(state)
+    assert "orders.xlsx" in captured_prompt["prompt"]
+    assert "1200行×5列" in captured_prompt["prompt"]

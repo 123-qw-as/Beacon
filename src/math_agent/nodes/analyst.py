@@ -27,7 +27,8 @@ def analyst_node(state: MathModelingState) -> dict:
         critic_fb = None
 
     prompt = build_prompt(state.problem, state.background, state.questions,
-                          retrieved_context=ctx, critic_feedback=critic_fb)
+                          retrieved_context=ctx, critic_feedback=critic_fb,
+                          data_files=state.data_files)
     blueprint: ProblemBlueprint = complete(
         prompt,
         schema=ProblemBlueprint,
@@ -39,8 +40,7 @@ def analyst_node(state: MathModelingState) -> dict:
     # problem_domains 是覆盖语义字段，每次 analyst 输出都同步更新
     # （题目理解调整后，参考文献方向也应随之更新 -- 这是预期行为）
     delta["problem_domains"] = blueprint.problem_domains
-    # assumptions 是追加字段。仅在首次（blueprint_iteration == 0）同步旧字段，
-    # 避免 analyst retry 时重复追加。
-    if state.blueprint_iteration == 0:
-        delta["assumptions"] = blueprint.assumptions
+    # assumptions 与 problem_blueprint 同属当前题目理解，采用覆盖语义；critic
+    # 触发 analyst retry 后也必须同步替换，避免后续节点继续使用旧假设。
+    delta["assumptions"] = blueprint.assumptions
     return delta

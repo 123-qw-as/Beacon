@@ -92,7 +92,8 @@ def sensitivity_node(state: MathModelingState) -> dict:
     cp_path = workdir / "_sensitivity_checkpoint.json"
     for attempt in range(MAX_CODE_RETRIES + 1):
         code_out: SensitivityCode = complete(
-            build_code_prompt(final, [r.model_dump() for r in plan.runs], prev_err, prev_kind),
+            build_code_prompt(final, [r.model_dump() for r in plan.runs], prev_err, prev_kind,
+                              data_dir=state.data_dir, data_files=state.data_files),
             schema=SensitivityCode, system=CODE_SYSTEM,
             model=MODEL_ROUTING.get("coder"),
         )

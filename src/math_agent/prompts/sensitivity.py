@@ -44,7 +44,8 @@ CODE_SYSTEM = (
 
 
 def build_code_prompt(model, plan_runs, prev_failure: str | None = None,
-                      prev_error_kind: str = ""):
+                      prev_error_kind: str = "",
+                      data_dir=None, data_files=None):
     """构造敏感性扫参代码 prompt。
 
     prev_error_kind: RunResult.error_kind，∈ {"", "timeout", "runtime"}
@@ -69,9 +70,13 @@ def build_code_prompt(model, plan_runs, prev_failure: str | None = None,
                 f"\n# 上次运行失败（runtime）\n"
                 f"stderr 节选：\n{prev_failure[:1000]}\n请修正后重试。\n"
             )
+    data_hint = ""
+    if data_dir and data_files:
+        from math_agent.prompts._data_hint import build_data_hint
+        data_hint = build_data_hint(data_dir, data_files)
     return (
         f"# 最终模型\n{model.description}\n方程：\n{chr(10).join(model.equations)}\n\n"
-        f"# 敏感性分析计划\n{desc}\n{fb}\n"
+        f"# 敏感性分析计划\n{desc}\n{data_hint}{fb}\n"
         f"请输出 JSON：{{\"code\": str}}。"
     )
 

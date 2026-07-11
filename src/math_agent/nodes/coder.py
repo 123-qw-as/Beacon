@@ -40,7 +40,9 @@ def coder_node(state: MathModelingState) -> dict:
         for attempt in range(MAX_CODE_RETRIES + 1):
             draft: CoderDraft = complete(
                 build_prompt_figure_one(model, purpose, prev_err, prev_kind,
-                                        blueprint=state.problem_blueprint),
+                                        blueprint=state.problem_blueprint,
+                                        data_dir=state.data_dir,
+                                        data_files=state.data_files),
                 schema=CoderDraft,
                 system=SYSTEM,
                 model=MODEL_ROUTING["coder"],

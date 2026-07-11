@@ -53,7 +53,8 @@ _SCHEMA_HINT = """请输出 JSON，结构与 ProblemBlueprint 一致：
 
 def build_prompt(problem: str, background: str, questions: list[str],
                  retrieved_context: str = "",
-                 critic_feedback=None) -> str:
+                 critic_feedback=None,
+                 data_files=None) -> str:
     qs = "\n".join(f"- {q}" for q in questions) or "（题目本身未列出独立小问）"
     ctx = f"\n{retrieved_context}\n\n" if retrieved_context else ""
     fb = ""
@@ -61,9 +62,13 @@ def build_prompt(problem: str, background: str, questions: list[str],
         issues = "\n".join(f"- {i.problem}" for i in critic_feedback.issues)
         sugs = "\n".join(f"- {s}" for s in critic_feedback.suggestions)
         fb = f"\n# 上一轮 Blueprint Critic 反馈\n问题：\n{issues}\n建议：\n{sugs}\n请据此修正蓝图。\n"
+    data_hint = ""
+    if data_files:
+        from math_agent.prompts._data_hint import build_data_summary_hint
+        data_hint = build_data_summary_hint(data_files)
     return (
         f"# 题目\n{problem}\n\n"
         f"# 背景\n{background or '（无）'}\n\n"
         f"# 小问\n{qs}\n\n"
-        f"{ctx}{fb}{_SCHEMA_HINT}"
+        f"{ctx}{data_hint}{fb}{_SCHEMA_HINT}"
     )

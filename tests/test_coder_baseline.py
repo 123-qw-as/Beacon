@@ -84,3 +84,34 @@ def test_main_figure_prompt_includes_ours_result_contract():
     m = ModelVersion(stage="final", description="test", variables={"x": "v"})
     prompt = build_prompt_figure_one(m, "plot1")
     assert "RESULT: baseline=ours" in prompt
+
+
+def test_coder_prompt_includes_data_file_paths():
+    from math_agent.state import ModelVersion, DataFileInfo
+    from math_agent.prompts.coder_figure_one import build_prompt_figure_one
+
+    model = ModelVersion(
+        stage="basic", description="VRP model",
+        equations=["min total_cost"], variables={"x": "binary route"},
+    )
+    data_files = [DataFileInfo(
+        filename="orders.xlsx", file_type="xlsx", path="orders.xlsx",
+        summary={"sheets": [{"name": "Sheet1", "rows": 100, "cols": 3}]}
+    )]
+    prompt = build_prompt_figure_one(
+        model, "plot cost chart", data_dir="/data/run1", data_files=data_files,
+    )
+    assert "/data/run1" in prompt
+    assert "orders.xlsx" in prompt
+    assert "pd.read_excel" in prompt
+
+
+def test_coder_prompt_no_data_hint_when_empty():
+    from math_agent.state import ModelVersion
+    from math_agent.prompts.coder_figure_one import build_prompt_figure_one
+
+    model = ModelVersion(
+        stage="basic", description="model", equations=[], variables={},
+    )
+    prompt = build_prompt_figure_one(model, "plot chart", data_dir=None, data_files=[])
+    assert "可用数据文件" not in prompt

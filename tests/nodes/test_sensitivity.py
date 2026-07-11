@@ -159,3 +159,61 @@ def test_sensitivity_prompt_on_runtime_feeds_stderr(mocker, workdir):
     assert "stderr 节选" in second_code_prompt
     assert "ZeroDivisionError" in second_code_prompt
     assert "缩小扫参规模" not in second_code_prompt
+
+
+def test_sensitivity_rejects_mismatched_result_lengths(mocker, workdir):
+    from math_agent.tools.runner import RunResult
+    plan = SensitivityPlan(runs=[{
+        "parameter": "lambda", "values": [1, 2], "metric": "y", "rationale": "r",
+    }])
+    code = SensitivityCode(code="print('unused')")
+    mocker.patch("math_agent.nodes.sensitivity.complete", side_effect=[plan, code])
+    mocker.patch("math_agent.nodes.sensitivity.run_python", return_value=RunResult(
+        success=True,
+        stdout="RESULT: parameter=lambda values=[1, 2] results=[3]",
+    ))
+    delta = sensitivity_node(_ok_state(workdir))
+    assert delta["errors"]
+    assert "sensitivity_runs" not in delta
+
+
+def test_sensitivity_rejects_incomplete_interpretations(mocker, workdir):
+    from math_agent.tools.runner import RunResult
+    plan = SensitivityPlan(runs=[
+        {"parameter": "a", "values": [1, 2], "metric": "y"},
+        {"parameter": "b", "values": [1, 2], "metric": "z"},
+    ])
+    code = SensitivityCode(code="print('unused')")
+    interpretations = Interpretations(interpretations=["only one"])
+    mocker.patch(
+        "math_agent.nodes.sensitivity.complete",
+        side_effect=[plan, code, interpretations],
+    )
+    mocker.patch("math_agent.nodes.sensitivity.run_python", return_value=RunResult(
+        success=True,
+        stdout=(
+            "RESULT: parameter=a values=[1, 2] results=[3, 4]\n"
+            "RESULT: parameter=b values=[1, 2] results=[5, 6]"
+        ),
+    ))
+    delta = sensitivity_node(_ok_state(workdir))
+    assert delta["errors"]
+    assert "sensitivity_runs" not in delta
+
+
+def test_sensitivity_code_prompt_includes_data_paths():
+    from math_agent.state import DataFileInfo
+    from math_agent.prompts.sensitivity import build_code_prompt
+
+    model = ModelVersion(
+        stage="improved", description="VRP with time windows",
+        equations=["min total_cost"], variables={},
+    )
+    plan_runs = [{"parameter": "alpha", "values": [0.1, 0.3, 0.5], "metric": "total_cost"}]
+    data_files = [DataFileInfo(
+        filename="distances.xlsx", file_type="xlsx", path="distances.xlsx",
+        summary={},
+    )]
+    prompt = build_code_prompt(model, plan_runs, data_dir="/data/run1", data_files=data_files)
+    assert "/data/run1" in prompt
+    assert "distances.xlsx" in prompt

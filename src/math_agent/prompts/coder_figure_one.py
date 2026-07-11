@@ -20,7 +20,7 @@ def _blueprint_metrics_hint(blueprint) -> str:
 
 
 def build_prompt_figure_one(model, purpose: str, prev_failure=None, prev_error_kind: str = "",
-                            blueprint=None):
+                            blueprint=None, data_dir=None, data_files=None):
     """构造单图代码生成 prompt。
 
     model: 当前 ModelVersion（提供 description / equations / variables 上下文）
@@ -47,9 +47,13 @@ def build_prompt_figure_one(model, purpose: str, prev_failure=None, prev_error_k
             # runtime 或未标记 -> 保持原行为：把 stderr 喂回让 LLM 修
             fb = f"\n# 上次运行失败（runtime）\nstderr 节选：\n{prev_failure[:1000]}\n请修正后重试。"
     metrics_hint = _blueprint_metrics_hint(blueprint)
+    data_hint = ""
+    if data_dir and data_files:
+        from math_agent.prompts._data_hint import build_data_hint
+        data_hint = build_data_hint(data_dir, data_files)
     return (
         f"# 模型描述\n{model.description}\n\n# 方程\n{eqs}\n\n# 变量\n{vars_}\n\n"
-        f"# 当前绘图任务\n{purpose}\n{metrics_hint}{fb}\n\n"
+        f"# 当前绘图任务\n{purpose}\n{metrics_hint}{data_hint}{fb}\n\n"
         f"请为上述绘图任务生成一段**独立可运行**的 Python 脚本。\n"
         f"脚本末尾必须用 print 输出关键指标，格式严格如下：\n"
         f"print(f'RESULT: baseline=ours total_cost={{total_cost}} service_rate={{service_rate}}')\n"
