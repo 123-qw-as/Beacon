@@ -402,6 +402,57 @@ h3 {
   font-weight: 700;
 }
 
+.attachment-zone {
+  min-height: 64px;
+  border-color: #b8d4c9;
+  background: #f0faf6;
+}
+
+.attachment-zone .upload-icon {
+  background: var(--green);
+}
+
+.attachment-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--white);
+  font-size: 0.86rem;
+}
+
+.attachment-item .att-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.attachment-item .att-meta {
+  color: var(--muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-item .att-remove {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 4px;
+  background: var(--rose);
+  color: var(--white);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
 .toggle {
   display: flex;
   align-items: center;

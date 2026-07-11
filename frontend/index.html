@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -49,15 +49,15 @@
         <section class="status-strip" aria-label="运行概览">
           <article>
             <span>当前阶段</span>
-            <strong id="currentStage">Writer</strong>
+            <strong id="currentStage">Ready</strong>
           </article>
           <article>
             <span>节点进度</span>
-            <strong id="nodeProgress">7 / 10</strong>
+            <strong id="nodeProgress">0 / 14</strong>
           </article>
           <article>
             <span>质量评分</span>
-            <strong id="qualityScore">86.4</strong>
+            <strong id="qualityScore">--</strong>
           </article>
           <article>
             <span>输出目录</span>
@@ -85,14 +85,24 @@
               <textarea id="problemBrief" rows="8">根据多仓库、多车辆、动态需求与道路拥堵信息，建立可解释的调度模型，并输出可复现实验、图表与论文。</textarea>
             </label>
 
-            <input class="visually-hidden" id="problemFile" type="file" accept=".json,.md,.txt,.pdf" />
-            <div class="upload-zone" tabindex="0" role="button" aria-label="上传题目 JSON 或 PDF" id="uploadZone">
+            <input class="visually-hidden" id="problemFile" type="file" accept=".json,.md,.txt,.pdf,.docx" />
+            <div class="upload-zone" tabindex="0" role="button" aria-label="上传题目 JSON、Markdown、文本、PDF 或 Word" id="uploadZone">
               <div class="upload-icon">+</div>
               <div>
                 <strong id="uploadTitle">拖入题目文件</strong>
-                <span id="uploadMeta">支持 JSON、PDF、Markdown 题面</span>
+                <span id="uploadMeta">支持 JSON、Markdown、TXT、PDF、Word 题面</span>
               </div>
             </div>
+
+            <input class="visually-hidden" id="attachmentFile" type="file" accept=".xlsx,.xls,.csv,.pdf,.docx,.txt,.md" multiple />
+            <div class="upload-zone attachment-zone" tabindex="0" role="button" aria-label="上传数据附件" id="attachmentZone">
+              <div class="upload-icon">📎</div>
+              <div>
+                <strong id="attachmentTitle">拖入数据附件</strong>
+                <span id="attachmentMeta">支持 Excel、CSV、PDF、Word、TXT（可多选）</span>
+              </div>
+            </div>
+            <div class="attachment-list" id="attachmentList"></div>
 
             <div class="control-row">
               <label class="toggle">
@@ -102,6 +112,10 @@
               <label class="toggle">
                 <input id="hitlToggle" type="checkbox" checked />
                 <span>Human-in-the-loop</span>
+              </label>
+              <label class="toggle">
+                <input id="forceToggle" type="checkbox" />
+                <span>覆盖已有输出</span>
               </label>
             </div>
           </section>
@@ -116,17 +130,19 @@
             </div>
 
             <ol class="pipeline-list" id="pipelineList">
-              <li class="done"><span>Analyst</span><small>题意拆解与 Problem Blueprint</small></li>
-              <li class="done"><span>Blueprint Critic</span><small>审查题目理解完整性</small></li>
-              <li class="done"><span>Modeler</span><small>建立基础与改进模型</small></li>
-              <li class="done"><span>Model Critic</span><small>检查假设与推导漏洞</small></li>
-              <li class="done"><span>Coder</span><small>生成可运行实验代码</small></li>
-              <li class="done"><span>Code Consistency</span><small>模型-代码一致性审查</small></li>
-              <li class="done"><span>Sensitivity</span><small>参数扫描与鲁棒性分析</small></li>
-              <li class="done"><span>Figure Pipeline</span><small>图表渲染与质量评审</small></li>
-              <li class="active"><span>Writer</span><small>分章节生成论文草稿</small></li>
+              <li><span>Analyst</span><small>题意拆解与 Problem Blueprint</small></li>
+              <li><span>Blueprint Critic</span><small>审查题目理解完整性</small></li>
+              <li><span>Modeler</span><small>建立基础与改进模型</small></li>
+              <li><span>Model Critic</span><small>检查假设与推导漏洞</small></li>
+              <li><span>Coder</span><small>生成可运行实验代码</small></li>
+              <li><span>Code Consistency</span><small>模型-代码一致性审查</small></li>
+              <li><span>Sensitivity</span><small>参数扫描与鲁棒性分析</small></li>
+              <li><span>Figure Pipeline</span><small>图表渲染与质量评审</small></li>
+              <li><span>Writer</span><small>分章节生成论文草稿</small></li>
               <li><span>Paper Critic</span><small>论文质量与格式评审</small></li>
+              <li><span>Table Assembler</span><small>注入表格并清洗正文</small></li>
               <li><span>Evaluation</span><small>综合评分与改进建议</small></li>
+              <li><span>Human Review</span><small>等待人工批准或拒绝</small></li>
               <li><span>LaTeX</span><small>编译 PDF 并回退 Markdown</small></li>
             </ol>
           </section>
