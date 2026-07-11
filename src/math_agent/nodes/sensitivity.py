@@ -89,6 +89,7 @@ def sensitivity_node(state: MathModelingState) -> dict:
     sandbox_result = None
     prev_err: str | None = None
     prev_kind: str = ""
+    cp_path = workdir / "_sensitivity_checkpoint.json"
     for attempt in range(MAX_CODE_RETRIES + 1):
         code_out: SensitivityCode = complete(
             build_code_prompt(final, [r.model_dump() for r in plan.runs], prev_err, prev_kind),
@@ -98,6 +99,21 @@ def sensitivity_node(state: MathModelingState) -> dict:
         sandbox_result = run_python(
             code_out.code, workdir=workdir / f"attempt_{attempt}", timeout=300,
         )
+        # 每 attempt 立即写 checkpoint + 进度日志
+        import json as _json
+        cp_path.write_text(
+            _json.dumps({
+                "attempt": attempt,
+                "success": sandbox_result.success,
+                "stdout": sandbox_result.stdout[:500],
+                "stderr": sandbox_result.stderr[:500],
+                "error_kind": sandbox_result.error_kind,
+                "artifact_paths": sandbox_result.artifact_paths,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"[sensitivity] attempt={attempt} success={sandbox_result.success} "
+              f"error_kind={sandbox_result.error_kind}", flush=True)
         if sandbox_result.success:
             break
         prev_err = sandbox_result.stderr
@@ -116,6 +132,8 @@ def sensitivity_node(state: MathModelingState) -> dict:
         plan_entry = by_name.get(param)
         if plan_entry is None:
             continue
+        if len(vals) != len(res):
+            continue
         fig = next((p for p in sandbox_result.artifact_paths if Path(p).stem == param), None)
         aligned.append(SensitivityRun(
             parameter=param, values=vals, metric=plan_entry.metric,
@@ -130,6 +148,10 @@ def sensitivity_node(state: MathModelingState) -> dict:
         schema=Interpretations, system=INTERPRET_SYSTEM,
         model=MODEL_ROUTING.get("writer"),
     )
+    if len(interp.interpretations) != len(aligned):
+        return {"errors": [
+            "sensitivity: 解读数量与数值结果数量不一致，拒绝写入不完整结果"
+        ]}
     for r, text in zip(aligned, interp.interpretations):
         r.interpretation = text
 

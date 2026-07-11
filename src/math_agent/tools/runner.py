@@ -49,10 +49,16 @@ import re as _re
 # LLM 生成代码常缺的 import。扫描代码体，缺哪个补哪个。
 # ponytail: 只补最常见 5 个库；复杂缺漏靠 retry 兜底，不做全量 ast 分析。
 _IMPORT_FIXES: list[tuple[str, str, str]] = [
-    # (检测标志, 缺 import 时补的行, 已有 import 的标志)
-    ("matplotlib.rcParams", "import matplotlib\nmatplotlib.use('Agg')", "import matplotlib"),
-    ("matplotlib.pyplot", "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt", "import matplotlib"),
-    ("plt\\.", "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt", "import matplotlib.pyplot"),
+    # (检测标志, 缺时补的行, already_marker — 若已在代码中存在则跳过)
+    #
+    # matplotlib Agg 后端：用 "matplotlib.use('Agg')" 做 already_marker，
+    # 而不是 "import matplotlib.pyplot"——旧逻辑会因为 LLM 已 import pyplot
+    # 就跳过 Agg 注入，导致 plt.show() 在子进程中尝试弹 GUI 窗口阻塞。
+    # 条目 2、3 的 fix_line 仍保留 import matplotlib.pyplot，
+    # 防止 LLM 只写了 plt.plot() 却忘了 import pyplot 的遗漏场景。
+    ("matplotlib.rcParams", "import matplotlib; matplotlib.use('Agg')", "matplotlib.use('Agg')"),
+    ("matplotlib\\.pyplot", "import matplotlib; matplotlib.use('Agg')\nimport matplotlib.pyplot", "matplotlib.use('Agg')"),
+    ("plt\\.", "import matplotlib; matplotlib.use('Agg')\nimport matplotlib.pyplot as plt", "matplotlib.use('Agg')"),
     ("np\\.", "import numpy as np", "import numpy"),
     ("pd\\.", "import pandas as pd", "import pandas"),
 ]
@@ -67,10 +73,28 @@ def _auto_fix_imports(code: str) -> str:
     prefix_lines: list[str] = []
     for pattern, fix_line, already_marker in _IMPORT_FIXES:
         if _re.search(pattern, code) and already_marker not in code:
-            prefix_lines.append(fix_line)
+            if fix_line not in prefix_lines:
+                prefix_lines.append(fix_line)
     if not prefix_lines:
         return code
     return "\n".join(prefix_lines) + "\n" + code
+
+
+# 危险调用：在非交互子进程中会弹 GUI 窗口阻塞。Agg 后端让它们变 no-op，
+# 但显式移除更安全——万一 matplotlib 内部在 Agg 下仍走 event loop 呢。
+# 覆盖 plt.show() / plt.ion() / fig.show()（fig 是 Figure 对象）。
+_DANGEROUS_CALL_RE = _re.compile(
+    r'^\s*(?:plt|fig)\.(?:show|ion)\s*\(.*\)\s*(?:#.*)?$',
+    _re.MULTILINE,
+)
+
+
+def _strip_dangerous_calls(code: str) -> str:
+    """移除 plt.show() / plt.ion() / fig.show() 等会阻塞子进程的 GUI 调用。"""
+    return _DANGEROUS_CALL_RE.sub(
+        '# [auto-removed: plt.show()/ion()/fig.show() blocks subprocess]',
+        code,
+    )
 
 
 def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
@@ -78,7 +102,8 @@ def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
     # 相对 script 解释为相对于新 cwd，导致路径双重前缀。
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
-    code = _auto_fix_imports(code)   # 补缺的 import，避免 NameError 白跑
+    code = _auto_fix_imports(code)   # 补缺的 import + matplotlib.use('Agg')
+    code = _strip_dangerous_calls(code)  # 移除 plt.show()/ion()/fig.show()，防止 GUI 阻塞
     script = workdir / "_run.py"
     script.write_text(code, encoding="utf-8")
 
@@ -96,9 +121,12 @@ def run_python(code: str, *, workdir: Path, timeout: int = 60) -> RunResult:
             env=_minimal_env(),
         )
     except subprocess.TimeoutExpired as e:
+        stdout = e.stdout or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
         return RunResult(
             success=False,
-            stdout=e.stdout or "",
+            stdout=stdout,
             stderr=f"timeout after {timeout}s",
             error_kind="timeout",
         )

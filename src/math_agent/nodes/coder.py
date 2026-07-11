@@ -1,10 +1,11 @@
 from __future__ import annotations
 from pathlib import Path
 import tempfile
+import json as _json
 
 from pydantic import BaseModel
 from math_agent.llm import complete
-from math_agent.config import MODEL_ROUTING
+from math_agent.config import MAX_CODE_RETRIES, MODEL_ROUTING
 from math_agent.prompts.coder import SYSTEM, build_prompt  # noqa: F401  (build_prompt kept for backward compat)
 from math_agent.prompts.coder_figure_one import build_prompt_figure_one
 from math_agent.prompts.coder_baseline import BASELINE_SPECS, build_baseline_prompt
@@ -15,9 +16,6 @@ from math_agent.tools.runner import run_python
 class CoderDraft(BaseModel):
     purpose: str
     code: str
-
-
-MAX_CODE_RETRIES = 1  # 一次失败后再给一次机会，避免成本失控
 
 
 def coder_node(state: MathModelingState) -> dict:
@@ -32,6 +30,8 @@ def coder_node(state: MathModelingState) -> dict:
     # batch 递增：每次 coder 运行产生新批次，一致性审查只看最新 batch
     max_batch = max((a.batch for a in state.code_artifacts), default=0)
     current_batch = max_batch + 1
+
+    checkpoint_path = workdir / "_checkpoint.json"
 
     artifacts: list[CodeArtifact] = []
     for i, purpose in enumerate(purposes):
@@ -57,6 +57,19 @@ def coder_node(state: MathModelingState) -> dict:
                     batch=current_batch,
                 )
             )
+            # 每 attempt 立即写 checkpoint + 进度日志
+            checkpoint_path.write_text(
+                _json.dumps(
+                    [{"purpose": a.purpose, "success": a.success,
+                      "stdout": a.stdout[:500], "stderr": a.stderr[:500],
+                      "artifact_paths": a.artifact_paths, "batch": a.batch}
+                     for a in artifacts],
+                    ensure_ascii=False, indent=2,
+                ),
+                encoding="utf-8",
+            )
+            print(f"[coder] purpose={i+1}/{len(purposes)} attempt={attempt} "
+                  f"success={result.success} error_kind={result.error_kind}", flush=True)
             if result.success:
                 break
             prev_err = result.stderr

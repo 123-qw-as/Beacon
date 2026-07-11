@@ -109,3 +109,132 @@ def test_extract_numeric_results_ignores_malformed():
     stdout = "RESULT: baseline=test\n"  # 没有 metric=value
     results = extract_numeric_results(stdout)
     assert results == {} or results.get("test") == {}
+
+
+def test_auto_fix_imports_handles_qualified_pyplot_after_matplotlib_import():
+    from math_agent.tools.runner import _auto_fix_imports
+    code = "import matplotlib\nmatplotlib.pyplot.plot([1, 2])"
+    fixed = _auto_fix_imports(code)
+    assert "import matplotlib.pyplot" in fixed.splitlines()[:3]
+
+
+def test_runner_decodes_timeout_output_bytes(mocker, workdir):
+    import subprocess
+    mocker.patch(
+        "math_agent.tools.runner.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("python", 1, output=b"partial\xff"),
+    )
+    res = run_python("print('x')", workdir=workdir, timeout=1)
+    assert isinstance(res.stdout, str)
+    assert res.stdout.startswith("partial")
+
+
+# ── Agg 注入 + plt.show 剥离 测试 ──
+
+
+def test_auto_fix_injects_agg_when_pyplot_already_imported():
+    """LLM 已 import pyplot 但未设置 Agg → 仍应注入 matplotlib.use('Agg')。"""
+    from math_agent.tools.runner import _auto_fix_imports
+    code = (
+        "import matplotlib.pyplot as plt\n"
+        "plt.plot([1, 2, 3])\n"
+        "plt.show()\n"
+    )
+    fixed = _auto_fix_imports(code)
+    assert "matplotlib.use('Agg')" in fixed
+
+
+def test_auto_fix_skips_agg_when_already_present():
+    """LLM 已显式设置 Agg → 不重复注入。"""
+    from math_agent.tools.runner import _auto_fix_imports
+    code = (
+        "import matplotlib\n"
+        "matplotlib.use('Agg')\n"
+        "import matplotlib.pyplot as plt\n"
+        "plt.plot([1, 2, 3])\n"
+    )
+    fixed = _auto_fix_imports(code)
+    assert fixed.count("matplotlib.use('Agg')") == 1
+
+
+def test_auto_fix_handles_rcParams_without_pyplot():
+    """仅使用 matplotlib.rcParams 也应注入 Agg。"""
+    from math_agent.tools.runner import _auto_fix_imports
+    code = (
+        "import matplotlib\n"
+        "matplotlib.rcParams['font.size'] = 10\n"
+    )
+    fixed = _auto_fix_imports(code)
+    assert "matplotlib.use('Agg')" in fixed
+
+
+def test_strip_dangerous_calls_removes_plt_show():
+    """plt.show() 被移除。"""
+    from math_agent.tools.runner import _strip_dangerous_calls
+    code = (
+        "import matplotlib.pyplot as plt\n"
+        "plt.plot([1, 2, 3])\n"
+        "plt.show()\n"
+    )
+    stripped = _strip_dangerous_calls(code)
+    assert "# [auto-removed:" in stripped
+    # 确认原始调用行（以 plt.show 开头的行）被替换
+    assert not any(line.strip().startswith("plt.show(") for line in stripped.splitlines())
+
+
+def test_strip_dangerous_calls_removes_plt_ion():
+    """plt.ion() 被移除。"""
+    from math_agent.tools.runner import _strip_dangerous_calls
+    code = (
+        "import matplotlib.pyplot as plt\n"
+        "plt.ion()\n"
+        "plt.plot([1, 2, 3])\n"
+    )
+    stripped = _strip_dangerous_calls(code)
+    assert "# [auto-removed:" in stripped
+    assert not any(line.strip().startswith("plt.ion(") for line in stripped.splitlines())
+
+
+def test_strip_dangerous_calls_removes_fig_show():
+    """fig.show() 被移除（Figure 对象调用 show 同理会阻塞）。"""
+    from math_agent.tools.runner import _strip_dangerous_calls
+    code = (
+        "import matplotlib.pyplot as plt\n"
+        "fig = plt.figure()\n"
+        "fig.show()\n"
+        "plt.savefig('out.png')\n"
+    )
+    stripped = _strip_dangerous_calls(code)
+    assert "# [auto-removed:" in stripped
+    assert not any(line.strip().startswith("fig.show(") for line in stripped.splitlines())
+
+
+def test_strip_dangerous_calls_preserves_savefig():
+    """savefig 不受影响。"""
+    from math_agent.tools.runner import _strip_dangerous_calls
+    code = (
+        "import matplotlib.pyplot as plt\n"
+        "plt.plot([1, 2, 3])\n"
+        "plt.savefig('out.png')\n"
+    )
+    stripped = _strip_dangerous_calls(code)
+    assert "savefig" in stripped
+    assert "auto-removed" not in stripped
+
+
+def test_runner_end_to_end_no_hang_from_plt_show(workdir):
+    """端到端：含 plt.show() 的代码在 run_python 中不阻塞，正常完成。"""
+    code = (
+        "import matplotlib\n"
+        "matplotlib.use('TkAgg')  # LLM 可能显式设 GUI backend\n"
+        "import matplotlib.pyplot as plt\n"
+        "plt.plot([1, 2, 3])\n"
+        "plt.show()\n"
+        "print('DONE')\n"
+    )
+    res = run_python(code, workdir=workdir, timeout=10)
+    # 即使 LLM 设了 TkAgg，_auto_fix_imports 会前置 Agg（因为
+    # already_marker 检查 Agg 而非 pyplot import），随后 _strip_dangerous_calls
+    # 移除 plt.show() → 必须不阻塞，不超时
+    assert res.success, f"timed out or crashed: {res.stderr[:200]}"
+    assert "DONE" in res.stdout
