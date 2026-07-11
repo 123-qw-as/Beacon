@@ -1,4 +1,4 @@
-from math_agent.rag.ingest import ingest_directory
+from math_agent.rag.ingest import ingest_directory, _extract_pdf_text
 
 
 def test_ingest_directory_processes_md_files(mocker, workdir):
@@ -59,26 +59,51 @@ def test_ingest_directory_skips_unreadable_files(mocker, workdir):
     assert len(rep.skipped) == 1
 
 
+def test_extract_pdf_text_uses_pymupdf_no_box_chars(tmp_path):
+    """Regression: pypdf produced box chars (□) for math symbols in CID-encoded
+    fonts. pymupdf (fitz) decodes them correctly. This test creates a real PDF
+    with math text via fitz and verifies _extract_pdf_text returns clean text."""
+    import fitz
+
+    pdf_path = tmp_path / "math_test.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    # 插入含数学符号的文本
+    math_text = "Integral: \u222bx dx  Sum: \u2211xi  Infinity: \u221e  Square: \u221ax"
+    page.insert_text((72, 72), math_text, fontsize=12)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    result = _extract_pdf_text(pdf_path)
+    # 不应包含方框字符
+    assert "\u25a1" not in result
+    assert "\ufffd" not in result
+
+
 def test_ingest_directory_is_idempotent_on_rerun(mocker, workdir):
     """同一 corpus 跑两次：第二次 chunks_added==0，DB 内 chunk 数不变。"""
     corpus = workdir / "corpus"
     corpus.mkdir()
     (corpus / "a.md").write_text("段落一\n\n段落二", encoding="utf-8")
     (corpus / "b.md").write_text("内容 b", encoding="utf-8")
-    mocker.patch("math_agent.rag.ingest.embed_texts",
-                  side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts))
+    embed = mocker.patch(
+        "math_agent.rag.ingest.embed_texts",
+        side_effect=lambda texts, **kw: [[1.0, 0.0, 0.0]] * len(texts),
+    )
 
     db = workdir / "vec.db"
     rep1 = ingest_directory(src_dir=corpus, db_path=db,
                             embedding_model="m", dim=3,
                             max_chars=200, overlap=20)
     assert rep1.chunks_added >= 2
+    calls_after_first_run = embed.call_count
 
     # 第二次跑同样 corpus：应全部命中去重，新增 0
     rep2 = ingest_directory(src_dir=corpus, db_path=db,
                             embedding_model="m", dim=3,
                             max_chars=200, overlap=20)
     assert rep2.chunks_added == 0
+    assert embed.call_count == calls_after_first_run  # 不重复消费 embedding API
 
     # DB 内 chunk 总数与第一次一致（用 search k=大数间接校验不翻倍）
     from math_agent.rag.store import VectorStore

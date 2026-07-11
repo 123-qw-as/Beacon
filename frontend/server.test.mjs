@@ -170,6 +170,28 @@ test("POST /api/run 接受 attachments 并写入 problem.json", async () => {
   await fetch(`${base}/api/runs/${runJson.run.id}/stop`, { method: "POST" });
 });
 
+test("POST /api/run accepts null fixturePath without 400 error", async () => {
+  // Regression: fixturePath null was rejected by validation that only allowed string|undefined
+  const response = await fetch(`${base}/api/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "test-null-fixture",
+      background: "test",
+      fixturePath: null,
+      outputDir: "runs/ui-test-null-fixture",
+      threadId: "test-null-fixture",
+      noInterrupt: true,
+      ragEnabled: false,
+    }),
+  });
+  assert.equal(response.status, 202);
+  const data = await response.json();
+  assert.ok(data.run.id);
+  // 清理
+  await fetch(`${base}/api/runs/${data.run.id}/stop`, { method: "POST" });
+});
+
 test("GET /api/env/check 返回环境检测结果", async () => {
   const response = await fetch(`${base}/api/env/check`);
   assert.equal(response.status, 200);
