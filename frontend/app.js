@@ -141,10 +141,10 @@ function updateCommand() {
   knowledgeBadge.textContent = ragToggle.checked ? "RAG On" : "RAG Off";
 }
 
-function activateNav(hash, { loadSettingsData = false } = {}) {
+function activateNav(hash) {
   navLinks.forEach((link) => link.classList.toggle("active", link.getAttribute("href") === hash));
   setSettingsView(hash === "#settings");
-  if (loadSettingsData && hash === "#settings") loadSettings();
+  if (hash === "#settings") loadSettings();
 }
 
 async function loadFixturesIntoProblem() {
@@ -667,7 +667,7 @@ attachmentZone?.addEventListener("drop", (event) => {
 
 window.addEventListener("hashchange", () => {
   const hash = window.location.hash || "#workspace";
-  activateNav(hash, { loadSettingsData: true });
+  activateNav(hash);
 });
 updatePipeline();
 updateCommand();
@@ -1176,5 +1176,5 @@ function setSettingsView(isSettingsView) {
   settingsPanel.hidden = !isSettingsView;
 }
 
-activateNav(window.location.hash || "#workspace", { loadSettingsData: true });
+activateNav(window.location.hash || "#workspace");
 
