@@ -154,6 +154,43 @@ def _extract_page_with_superscripts(page) -> str:
     return "\n".join(lines_out)
 
 
+def _extract_tables_as_markdown(path: Path) -> str:
+    """用 pdfplumber 提取表格，渲染为 Markdown 表格文本。"""
+    try:
+        import pdfplumber
+    except ImportError:
+        return ""
+    tables_md = []
+    with pdfplumber.open(str(path)) as pdf:
+        for page in pdf.pages:
+            for table in page.extract_tables() or []:
+                if not table or len(table) < 2:
+                    continue
+                # 清洗单元格
+                rows = [[(c or "").replace("\n", " ").strip() for c in row] for row in table]
+                # 跳过全空行
+                rows = [r for r in rows if any(c for c in r)]
+                if len(rows) < 2:
+                    continue
+                # 过滤假表格：至少 2 列且至少 2 行有内容
+                max_cols = max(len(r) for r in rows)
+                if max_cols < 2:
+                    continue
+                # 补齐每行列数
+                for r in rows:
+                    while len(r) < max_cols:
+                        r.append("")
+                header = rows[0]
+                md = "| " + " | ".join(header) + " |"
+                md += "\n|" + "|".join("---" for _ in header) + "|"
+                for row in rows[1:]:
+                    md += "\n| " + " | ".join(row) + " |"
+                tables_md.append(md)
+    if not tables_md:
+        return ""
+    return "\n\n# 提取的表格\n\n" + "\n\n".join(tables_md)
+
+
 def _meta_pdf(path: Path) -> dict:
     # 优先使用 PyMuPDF (fitz)，其对数学符号/CID 字体的解码远优于 pypdf
     try:
@@ -171,6 +208,10 @@ def _meta_pdf(path: Path) -> dict:
     # lone-surrogate 清洗 + 数学符号规范化
     text = raw.encode("utf-8", errors="ignore").decode("utf-8")
     text = _normalize_math_text(text)
+    # pdfplumber 表格结构化提取，拼到文本末尾
+    tables_md = _extract_tables_as_markdown(path)
+    if tables_md:
+        text = text + tables_md
     return {"text_excerpt": text[:5000], "total_pages": total_pages}
 
 

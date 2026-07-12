@@ -23,6 +23,7 @@ dependencies = [
     "openpyxl>=3.1",
     "python-docx>=1.1",
     "pymupdf",
+    "pdfplumber>=0.11",
 ]
 
 [project.optional-dependencies]
