@@ -28,7 +28,8 @@ def test_paper_critic_handles_missing_paper(mocker):
     s = MathModelingState(problem="p")
     delta = paper_critic_node(s)
     assert delta["errors"]
-    assert delta.get("critic_reports", []) == []
+    assert delta["critic_reports"][0].score == 0
+    assert delta["critic_reports"][0].approved is False
 
 
 def _paper_with_numbers():

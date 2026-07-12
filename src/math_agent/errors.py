@@ -73,6 +73,10 @@ _TRANSPORT_HINTS = (
     "ServiceUnavailable", "502", "503", "504",
     "httpx.TimeoutException",   # litellm 完全层透传 httpx 读/连接超时
     "APITimeoutError",          # openai SDK 包装的 TimeoutExpired
+    "ConnectError",             # httpx 连接失败
+    "RemoteProtocolError",      # 上游提前断开 / 非法 HTTP 响应
+    "PoolTimeout",              # 连接池耗尽
+    "NetworkError",
 )
 
 
@@ -87,9 +91,9 @@ def classify_exception(e: BaseException) -> MathAgentError:
         return e
     name = type(e).__name__
     msg = str(e)
-    blob = f"{name} {msg}"
-    if any(h in blob for h in _RATE_LIMIT_HINTS):
+    blob = f"{name} {msg}".lower()
+    if any(h.lower() in blob for h in _RATE_LIMIT_HINTS):
         return LLMRateLimitError(msg)
-    if any(h in blob for h in _TRANSPORT_HINTS):
+    if any(h.lower() in blob for h in _TRANSPORT_HINTS):
         return LLMTransportError(msg)
     return LLMError(msg)

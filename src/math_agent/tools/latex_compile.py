@@ -17,13 +17,18 @@ class LatexResult:
 
 def compile_latex(tex_path: str | Path, *, timeout: int = 120) -> LatexResult:
     tex_path = Path(tex_path)
+    workdir = tex_path.parent
+    pdf = workdir / (tex_path.stem + ".pdf")
+    log_path = workdir / "compile.log"
+    # 避免上一次运行残留的 PDF 让本次失败被误判为成功或继续展示。
+    pdf.unlink(missing_ok=True)
+    log_path.unlink(missing_ok=True)
     if shutil.which("xelatex") is None:
+        log_path.write_text("xelatex not found on PATH", encoding="utf-8")
         return LatexResult(
             success=False, log="xelatex not found on PATH",
             error_kind="missing_binary",
         )
-
-    workdir = tex_path.parent
     try:
         # 跑两遍以解决交叉引用 / TOC。
         # 不用 -halt-on-error：writer 生成的 LaTeX 偶有非致命错误（如
@@ -40,7 +45,7 @@ def compile_latex(tex_path: str | Path, *, timeout: int = 120) -> LatexResult:
             log_acc.append((proc.stdout or "") + "\n" + (proc.stderr or ""))
 
         full_log = "\n".join(log_acc)
-        pdf = workdir / (tex_path.stem + ".pdf")
+        log_path.write_text(full_log, encoding="utf-8", errors="replace")
         # success 双条件：PDF 存在 + log 里没有致命错误（以 '! ' 开头的行）。
         # 'Extra alignment tab has been changed to \cr' 和 'Missing $ inserted'
         # 是 xelatex 已自动修复的非致命错误——xelatex 自己说了 "has been changed" /
@@ -65,6 +70,7 @@ def compile_latex(tex_path: str | Path, *, timeout: int = 120) -> LatexResult:
             )
         return LatexResult(success=True, pdf_path=str(pdf), log=full_log)
     except subprocess.TimeoutExpired as e:
+        log_path.write_text(f"timeout after {timeout}s: {e}", encoding="utf-8")
         return LatexResult(
             success=False, log=f"timeout after {timeout}s: {e}",
             error_kind="timeout",

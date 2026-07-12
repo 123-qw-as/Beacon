@@ -34,15 +34,31 @@ def search_references(query: str, *, limit: int = 10, timeout: int = 10) -> list
     if resp.status_code != 200:
         return []  # 429 rate limit / 5xx 都降级
 
-    data = resp.json().get("data", [])
+    try:
+        payload = resp.json()
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data", [])
+    if not isinstance(data, list):
+        return []
     refs: list[Reference] = []
     for item in data:
+        if not isinstance(item, dict):
+            continue
+        authors = item.get("authors") or []
+        if not isinstance(authors, list):
+            authors = []
+        external_ids = item.get("externalIds") or {}
+        if not isinstance(external_ids, dict):
+            external_ids = {}
         refs.append(Reference(
-            id=item.get("paperId", ""),
-            title=item.get("title", ""),
-            authors=[a.get("name", "") for a in item.get("authors", [])],
+            id=item.get("paperId") or "",
+            title=item.get("title") or "",
+            authors=[a.get("name") or "" for a in authors if isinstance(a, dict)],
             venue=item.get("venue", "") or "",
             year=item.get("year", 0) or 0,
-            doi=(item.get("externalIds") or {}).get("DOI", ""),
+            doi=external_ids.get("DOI") or "",
         ))
     return refs

@@ -325,3 +325,21 @@ def test_table_assembler_node_injects_comparison_table():
     assert "| 方案 |" in result["paper"].solution
     assert "无调度" in result["paper"].solution
 
+
+def test_table_assembler_ignores_old_coder_batches():
+    from math_agent.state import MathModelingState, PaperSections, CodeArtifact
+    state = MathModelingState(problem="test", paper=PaperSections(solution="结果"))
+    state.code_artifacts = [
+        CodeArtifact(
+            purpose="old", code="", success=True, batch=1,
+            stdout="RESULT: baseline=old cost=999", category="baseline:old",
+        ),
+        CodeArtifact(
+            purpose="new", code="", success=True, batch=2,
+            stdout="RESULT: baseline=ours cost=100", category="baseline:ours",
+        ),
+    ]
+    result = table_assembler_node(state)
+    assert "999" not in result["paper"].solution
+    assert "100.0" in result["paper"].solution
+

@@ -33,6 +33,7 @@ def test_routing_after_final_goes_to_coder():
 
 def _state_with_paper_critic(score: int, approved: bool, writer_iter: int):
     s = MathModelingState(problem="p")
+    s.paper.abstract = "非空论文"
     s.writer_iteration = writer_iter
     s.critic_reports.append(CriticReport(
         target="paper", score=score, approved=approved,
@@ -57,9 +58,16 @@ def test_after_paper_critic_advances_when_iter_cap_hit():
     assert after_paper_critic(s) == "advance"
 
 
-def test_after_paper_critic_advances_when_no_critic():
+def test_after_paper_critic_retries_when_no_critic():
     s = MathModelingState(problem="p")
-    assert after_paper_critic(s) == "advance"
+    s.paper.abstract = "非空论文"
+    assert after_paper_critic(s) == "retry"
+
+
+def test_after_paper_critic_stops_empty_paper_at_iteration_cap():
+    from math_agent.config import MAX_WRITER_ITERATIONS
+    s = MathModelingState(problem="p", writer_iteration=MAX_WRITER_ITERATIONS)
+    assert after_paper_critic(s) == "stop"
 
 
 # ---------------------------------------------------------------------------
@@ -131,3 +139,17 @@ def test_consistency_advances_with_warning_at_cap():
 def test_consistency_retries_coder_when_no_reports():
     s = MathModelingState(problem="p", code_verify_iteration=0)
     assert after_model_code_consistency(s) == "retry_coder"
+
+
+def test_human_review_routes_rejection_to_stop():
+    from math_agent.routing import after_human_review
+    from math_agent.state import HumanDecision
+    s = MathModelingState(problem="p", human_decision=HumanDecision(approved=False))
+    assert after_human_review(s) == "stop"
+
+
+def test_human_review_routes_approval_to_finalize():
+    from math_agent.routing import after_human_review
+    from math_agent.state import HumanDecision
+    s = MathModelingState(problem="p", human_decision=HumanDecision(approved=True))
+    assert after_human_review(s) == "finalize"

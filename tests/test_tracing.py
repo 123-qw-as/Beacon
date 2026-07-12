@@ -46,3 +46,56 @@ def test_tracer_current_handle_set_get_reset():
     finally:
         reset_current(tok)
     assert get_current() is None
+
+
+def test_tracer_can_append_existing_trace(workdir):
+    first = Tracer(thread_id="t1", out_dir=workdir)
+    first.log_llm(model="A", prompt_tokens=10, completion_tokens=5, latency_ms=20)
+    with first.node("analyst"):
+        pass
+    first.flush()
+
+    resumed = Tracer(thread_id="t1", out_dir=workdir, append_existing=True)
+    resumed.log_llm(model="A", prompt_tokens=7, completion_tokens=3, latency_ms=10)
+    with resumed.node("modeler"):
+        pass
+    resumed.flush()
+
+    rep = json.loads((workdir / "trace.json").read_text(encoding="utf-8"))
+    assert rep["llm_calls"] == 2
+    assert rep["tokens"] == {"prompt": 17, "completion": 8}
+    assert [n["name"] for n in rep["nodes"]] == ["analyst", "modeler"]
+
+
+def test_wrapped_node_preserves_failed_node_name():
+    import pytest
+    from math_agent.graph import _wrap
+    from math_agent.tracing import clear_failed_node, get_last_node
+
+    clear_failed_node()
+    wrapped = _wrap(lambda _state: (_ for _ in ()).throw(RuntimeError("boom")), "coder")
+    with pytest.raises(RuntimeError, match="boom"):
+        wrapped(None)
+    assert get_last_node() == "coder"
+    clear_failed_node()
+
+
+def test_tracer_ignores_valid_json_with_wrong_shape(workdir):
+    (workdir / "trace.json").write_text("[]", encoding="utf-8")
+    tracer = Tracer(thread_id="t1", out_dir=workdir, append_existing=True)
+    tracer.log_llm(model="A", prompt_tokens=1, completion_tokens=2, latency_ms=3)
+    assert tracer.llm_calls == 1
+
+
+def test_tracer_normalizes_partial_model_stats(workdir):
+    (workdir / "trace.json").write_text(json.dumps({
+        "thread_id": "t1",
+        "llm_calls": 1,
+        "tokens": None,
+        "per_model": {"A": {"calls": 1, "latency_ms": "invalid"}},
+        "nodes": "invalid",
+    }), encoding="utf-8")
+    tracer = Tracer(thread_id="t1", out_dir=workdir, append_existing=True)
+    tracer.log_llm(model="A", prompt_tokens=4, completion_tokens=5, latency_ms=6)
+    assert tracer.per_model["A"]["calls"] == 2
+    assert tracer.per_model["A"]["prompt_tokens"] == 4

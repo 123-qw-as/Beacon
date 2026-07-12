@@ -20,6 +20,13 @@ _current: "contextvars.ContextVar[Tracer | None]" = contextvars.ContextVar(
 )
 
 
+def _safe_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 @dataclass
 class _NodeRecord:
     name: str
@@ -31,6 +38,7 @@ class _NodeRecord:
 class Tracer:
     thread_id: str
     out_dir: Path
+    append_existing: bool = False
 
     llm_calls: int = 0
     prompt_tokens: int = 0
@@ -41,6 +49,51 @@ class Tracer:
     def __post_init__(self):
         self.out_dir = Path(self.out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        if self.append_existing:
+            self._load_existing()
+
+    def _load_existing(self) -> None:
+        """恢复/续跑时载入同一 thread 的旧 trace，避免覆盖前半段统计。"""
+        path = self.out_dir / "trace.json"
+        if not path.exists():
+            return
+        try:
+            blob = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(blob, dict):
+            return
+        if blob.get("thread_id") != self.thread_id:
+            return
+        self.llm_calls = _safe_int(blob.get("llm_calls", 0))
+        tokens = blob.get("tokens", {})
+        if not isinstance(tokens, dict):
+            tokens = {}
+        self.prompt_tokens = _safe_int(tokens.get("prompt", 0))
+        self.completion_tokens = _safe_int(tokens.get("completion", 0))
+        raw_models = blob.get("per_model", {})
+        if isinstance(raw_models, dict):
+            for model, raw in raw_models.items():
+                if not isinstance(raw, dict):
+                    continue
+                self.per_model[str(model)] = {
+                    "calls": _safe_int(raw.get("calls", 0)),
+                    "prompt_tokens": _safe_int(raw.get("prompt_tokens", 0)),
+                    "completion_tokens": _safe_int(raw.get("completion_tokens", 0)),
+                    "latency_ms": _safe_int(raw.get("latency_ms", 0)),
+                }
+        raw_nodes = blob.get("nodes", [])
+        if not isinstance(raw_nodes, list):
+            raw_nodes = []
+        self.nodes = [
+            _NodeRecord(
+                name=str(item.get("name", "(unknown)")),
+                start_ms=0,
+                duration_ms=_safe_int(item.get("duration_ms", 0)),
+            )
+            for item in raw_nodes
+            if isinstance(item, dict)
+        ]
 
     # ---- 公共 API ----
 
@@ -104,14 +157,27 @@ _last_node: "contextvars.ContextVar[str]" = contextvars.ContextVar(
     "math_agent_last_node", default="(unknown)",
 )
 
+_failed_node: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "math_agent_failed_node", default="(unknown)",
+)
+
 
 def set_last_node(name: str) -> contextvars.Token:
     return _last_node.set(name)
 
 
 def get_last_node() -> str:
-    return _last_node.get()
+    failed = _failed_node.get()
+    return failed if failed != "(unknown)" else _last_node.get()
 
 
 def reset_last_node(token: contextvars.Token) -> None:
     _last_node.reset(token)
+
+
+def record_failed_node(name: str) -> None:
+    _failed_node.set(name)
+
+
+def clear_failed_node() -> None:
+    _failed_node.set("(unknown)")

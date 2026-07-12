@@ -127,3 +127,41 @@ def test_store_add_persists_metadata(workdir):
     assert hits[0].source_type == "model_lib"
     assert hits[0].section == "适用场景"
     store.close()
+
+
+def test_source_filter_searches_beyond_global_top_k(workdir):
+    """过滤必须在完整候选集上取 top-k，不能被更近的其他类型挤成空结果。"""
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.add(
+        chunks=[
+            Chunk(text=f"model {i}", source=f"m{i}", index=0, source_type="model_lib")
+            for i in range(3)
+        ] + [Chunk(text="paper", source="p", index=0, source_type="paper")],
+        embeddings=[
+            [1.0, 0.0, 0.0], [0.99, 0.01, 0.0], [0.98, 0.02, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+    )
+    hits = store.search([1.0, 0.0, 0.0], k=1, source_type="paper")
+    assert [h.text for h in hits] == ["paper"]
+    store.close()
+
+
+def test_store_search_rejects_non_positive_k(workdir):
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    with pytest.raises(ValueError, match="k"):
+        store.search([1.0, 0.0, 0.0], k=0)
+    store.close()
+
+
+def test_missing_chunks_filters_existing_and_in_batch_duplicates(workdir):
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    existing = Chunk(text="same", source="a.md", index=0)
+    store.add(chunks=[existing], embeddings=[[1.0, 0.0, 0.0]])
+    missing = store.missing_chunks([
+        Chunk(text="same", source="a.md", index=1),
+        Chunk(text="new", source="a.md", index=2),
+        Chunk(text="new", source="a.md", index=3),
+    ])
+    assert [c.text for c in missing] == ["new"]
+    store.close()

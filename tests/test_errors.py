@@ -45,10 +45,16 @@ def test_classify_5xx_and_connection_error_as_transport():
         RuntimeError("Server error '502 Bad Gateway' for url 'http://x/embed'"),
         RuntimeError("HTTP 503 Service Unavailable"),
         RuntimeError("504 Gateway Timeout"),
+        type("ConnectError", (Exception,), {})("connection refused"),
+        type("RemoteProtocolError", (Exception,), {})("server disconnected"),
     ]
     for e in cases:
         out = classify_exception(e)
         assert isinstance(out, LLMTransportError), f"{e} -> {type(out).__name__}"
+
+
+def test_classify_rate_limit_is_case_insensitive():
+    assert isinstance(classify_exception(RuntimeError("RATE LIMIT 429")), LLMRateLimitError)
 
 
 def test_classify_unknown_passes_through_as_llmerror():

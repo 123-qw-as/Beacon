@@ -43,7 +43,7 @@ def _evaluate(case_id: str, final_state, expect: dict, *,
               output_dir: Path | None = None) -> BenchCase:
     failures: list[str] = []
     evaluation = _get(final_state, "evaluation")
-    overall = float(evaluation.overall) if evaluation is not None else 0.0
+    overall = float(_get(evaluation, "overall", 0)) if evaluation is not None else 0.0
     if overall < expect["min_overall"]:
         failures.append(f"overall {overall} < {expect['min_overall']}")
 
@@ -52,10 +52,10 @@ def _evaluate(case_id: str, final_state, expect: dict, *,
         text = ""
     else:
         text = " ".join([
-            getattr(paper, "abstract", "") or "",
-            getattr(paper, "model_section", "") or "",
-            getattr(paper, "solution", "") or "",
-            getattr(paper, "conclusion", "") or "",
+            _get(paper, "abstract", "") or "",
+            _get(paper, "model_section", "") or "",
+            _get(paper, "solution", "") or "",
+            _get(paper, "conclusion", "") or "",
         ])
     for kw in expect.get("must_contain_keywords", []):
         if kw not in text:
@@ -102,7 +102,7 @@ def _check_plan_d_fields(final_state, expect: dict,
         models = _get(final_state, "model_versions") or []
         if models:
             last = models[-1]
-            steps = len(getattr(last, "derivation_steps", []) or [])
+            steps = len(_get(last, "derivation_steps", []) or [])
             if steps < expect["min_derivation_steps"]:
                 failures.append(
                     f"derivation_steps {steps} < {expect['min_derivation_steps']}")
@@ -110,7 +110,7 @@ def _check_plan_d_fields(final_state, expect: dict,
 
     if "min_references" in expect:
         paper = _get(final_state, "paper")
-        refs_text = getattr(paper, "references", "") if paper is not None else ""
+        refs_text = _get(paper, "references", "") if paper is not None else ""
         refs_text = refs_text or ""
         # 优先按 [N] 模式计数；无匹配则按非空行计数。
         ref_lines = [l.strip() for l in refs_text.split("\n")
@@ -127,7 +127,7 @@ def _check_plan_d_fields(final_state, expect: dict,
             (r for r in reversed(critics)
              if _get(r, "target", "") == "paper"), None)
         if paper_critic is not None:
-            issues = len(getattr(paper_critic, "issues", []) or [])
+            issues = len(_get(paper_critic, "issues", []) or [])
             if issues > expect["max_paper_critic_issues"]:
                 failures.append(
                     f"paper_critic_issues {issues} > {expect['max_paper_critic_issues']}")

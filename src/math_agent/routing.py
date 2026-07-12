@@ -46,9 +46,14 @@ def after_model_critic(state: MathModelingState) -> str:
 
 def after_paper_critic(state: MathModelingState) -> str:
     """writer 闭环：critic 通过或迭代用尽 → advance；否则 retry 回 writer。"""
+    paper_has_content = any([
+        state.paper.abstract, state.paper.model_section, state.paper.solution,
+    ])
+    if not paper_has_content:
+        return "stop" if state.writer_iteration >= MAX_WRITER_ITERATIONS else "retry"
     critic = state.latest_critic("paper")
     if critic is None:
-        return "advance"
+        return "stop" if state.writer_iteration >= MAX_WRITER_ITERATIONS else "retry"
     if critic.approved or state.writer_iteration >= MAX_WRITER_ITERATIONS:
         return "advance"
     return "retry"
@@ -77,3 +82,9 @@ def after_model_code_consistency(state: MathModelingState) -> str:
     if state.code_verify_iteration >= MAX_CODE_VERIFY_ITERATIONS:
         return "advance_with_warning"
     return "retry_coder"
+
+
+def after_human_review(state: MathModelingState) -> str:
+    """只有明确批准才进入最终 LaTeX；拒绝或缺少决定都停止。"""
+    decision = state.human_decision
+    return "finalize" if decision is not None and decision.approved else "stop"

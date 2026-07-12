@@ -33,3 +33,25 @@ def test_run_bench_writes_report_json(workdir, install_bench_mocks):
     run_bench(out_dir=workdir)
     blob = json.loads((workdir / "bench_report.json").read_text(encoding="utf-8"))
     assert "cases" in blob and len(blob["cases"]) == 2
+
+
+def test_evaluate_supports_fully_serialized_state():
+    from math_agent.bench.runner import _evaluate
+    state = {
+        "evaluation": {"overall": 8.0},
+        "paper": {
+            "abstract": "覆盖 无人机 鲁棒",
+            "model_section": "覆盖",
+            "solution": "无人机",
+            "conclusion": "鲁棒",
+        },
+        "sensitivity_runs": [{"parameter": "x"}],
+        "figures": [{"path": "x.png"}],
+    }
+    case = _evaluate("dict", state, {
+        "min_overall": 6.5,
+        "must_contain_keywords": ["覆盖", "无人机", "鲁棒"],
+        "must_have_sensitivity": True,
+        "must_have_figures": True,
+    })
+    assert case.passed, case.failures

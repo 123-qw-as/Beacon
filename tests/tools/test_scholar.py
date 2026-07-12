@@ -38,3 +38,35 @@ def test_search_references_returns_empty_on_rate_limit(mocker):
     mocker.patch("math_agent.tools.scholar.requests.get", return_value=fake_resp)
     refs = search_references("anything", limit=5)
     assert refs == []
+
+
+def test_search_references_returns_empty_on_invalid_json(mocker):
+    fake_resp = mocker.MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.side_effect = ValueError("invalid json")
+    mocker.patch("math_agent.tools.scholar.requests.get", return_value=fake_resp)
+    assert search_references("anything", limit=5) == []
+
+
+def test_search_references_skips_malformed_items(mocker):
+    fake_resp = mocker.MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {"data": [None, "bad", {"paperId": "ok", "title": "Valid"}]}
+    mocker.patch("math_agent.tools.scholar.requests.get", return_value=fake_resp)
+    refs = search_references("anything", limit=5)
+    assert [r.id for r in refs] == ["ok"]
+
+
+def test_search_references_tolerates_null_nested_fields(mocker):
+    fake_resp = mocker.MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {"data": [{
+        "paperId": "ok", "title": None, "authors": None,
+        "externalIds": "invalid", "venue": None, "year": None,
+    }]}
+    mocker.patch("math_agent.tools.scholar.requests.get", return_value=fake_resp)
+    refs = search_references("anything", limit=5)
+    assert len(refs) == 1
+    assert refs[0].title == ""
+    assert refs[0].authors == []
+    assert refs[0].doi == ""

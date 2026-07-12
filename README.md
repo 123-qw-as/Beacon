@@ -63,37 +63,42 @@ Open **http://localhost:5173** in your browser — the Web UI will guide you thr
 
 ## How It Works
 
-Beacon uses **LangGraph** to orchestrate a 10-node agent pipeline:
+Beacon 使用 **LangGraph** 编排 14 个用户可见阶段（另含内部阶段切换节点）：
 
 ```mermaid
 graph LR
-    A[Analyst] --> B[Modeler]
-    B --> C[Model Critic]
-    C -->|retry| B
-    C -->|advance| D[Coder]
-    D --> E[Sensitivity]
-    E --> F[Figure Pipeline]
-    F --> G[Writer]
-    G --> H[Paper Critic]
-    H -->|retry| G
-    H -->|advance| I[Evaluation]
-    I --> J[Human Review]
-    J --> K[LaTeX / PDF]
+    A[Analyst] --> B[Blueprint Critic]
+    B -->|retry| A
+    B -->|advance| C[Modeler]
+    C --> D[Model Critic]
+    D -->|retry| C
+    D -->|advance| E[Coder]
+    E --> F[Code Consistency]
+    F -->|retry| E
+    F -->|advance| G[Sensitivity]
+    G --> H[Figure Pipeline]
+    H --> I[Writer]
+    I --> J[Paper Critic]
+    J -->|retry| I
+    J -->|advance| K[Table Assembler]
+    K --> L[Evaluation]
+    L --> M[Human Review]
+    M -->|approve| N[LaTeX / PDF]
+    M -->|reject| O[End without finalization]
 ```
 
 | Node | Role |
 |------|------|
-| **Analyst** | Decomposes the problem, identifies constraints and domains |
-| **Modeler** | Builds models through basic → improved → final stages |
-| **Model Critic** | Validates assumptions, catches derivation gaps |
-| **Coder** | Generates executable Python code for experiments |
-| **Sensitivity** | Runs parameter sweeps and robustness analysis |
-| **Figure Pipeline** | Renders charts + multi-modal quality review |
-| **Writer** | Generates paper sections with structured outlines |
-| **Paper Critic** | Reviews paper quality and format |
-| **Evaluation** | Produces rubric-aligned scoring (6 dimensions) |
-| **Human Review** | Pauses for human approval before finalization |
-| **LaTeX** | Compiles paper to PDF via XeLaTeX, falls back to Markdown |
+| **Analyst / Blueprint Critic** | 结构化拆题并审查小问、变量、目标、约束与验证计划 |
+| **Modeler / Model Critic** | 按 basic → improved → final 建模，并检查假设与推导 |
+| **Coder / Code Consistency** | 生成可执行实验代码，并核对模型、代码和输出指标 |
+| **Sensitivity** | 执行参数扫描与鲁棒性分析 |
+| **Figure Pipeline** | 收集图像，执行多模态质量评审与图说生成 |
+| **Writer / Paper Critic** | 按章节写作，并在评审反馈下定向重写 |
+| **Table Assembler** | 从结构化结果生成表格并清理内部术语 |
+| **Evaluation** | 按竞赛评价维度生成量化评分 |
+| **Human Review** | 批准后才进入最终编译；拒绝则安全结束，不生成最终稿 |
+| **LaTeX** | 用 XeLaTeX 编译 PDF；不可用或失败时保留 Markdown/TeX |
 
 **Key design choices:**
 - Every LLM call goes through a **unified `complete()` with retry, timeout, and structured output repair**
@@ -112,9 +117,9 @@ Beacon ships with a complete browser-based workspace:
 </p>
 
 **Features:**
-- **Problem configuration** — paste a problem or import from JSON/Markdown/PDF
+- **题目配置** — 可粘贴题面或导入 JSON、Markdown、TXT；PDF 需先转换为文本
 - **Template switching** — Default (standard paper) or GMCM (国赛 gmcmthesis)
-- **Live pipeline progress** — 10-stage visualization with real-time node status
+- **实时进度** — 展示 14 个阶段，并从后端节点日志同步状态
 - **Run control** — start, monitor logs, stop, and view artifacts
 - **RAG toggle** — enable/disable retrieval augmentation per run
 - **HITL toggle** — run fully automatic or pause for human approval
@@ -139,6 +144,9 @@ uv run math-agent run \
 
 # After reviewing intermediate results, approve and continue
 uv run math-agent resume --out runs/demo2 --approve --notes "looks good"
+
+# 审阅不通过时显式拒绝并安全结束（不会生成最终稿）
+uv run math-agent resume --out runs/demo2 --no-approve --notes "需要重新建模"
 
 # Recover from a crash without manual approval
 uv run math-agent recover --out runs/demo2
@@ -251,6 +259,7 @@ OPENAI_API_KEY=your-key-here
 # --- Model Selection ---
 MATH_AGENT_DEFAULT_MODEL=openai/gpt-4o-mini  # For routine nodes (coder)
 MATH_AGENT_STRONG_MODEL=openai/gpt-4o        # For core nodes (analyst, modeler, writer)
+MATH_AGENT_MAX_MODEL_ITERATIONS=3            # 每个建模阶段的最大评审轮次（Web UI 可调 1-5）
 
 # --- RAG (optional) ---
 MATH_AGENT_RAG_ENABLED=1
@@ -332,6 +341,9 @@ uv run math-agent recover --out runs/your-run
 
 # For crashes at human_review (you need to inject a decision)
 uv run math-agent resume --out runs/your-run --approve --notes "approved"
+
+# 也可以显式拒绝，流程将保留中间产物并停止
+uv run math-agent resume --out runs/your-run --no-approve --notes "reject"
 ```
 
 The `recover` command restarts from the last saved LangGraph checkpoint. The `resume` command does the same but also injects a human approval decision.

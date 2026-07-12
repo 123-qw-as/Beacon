@@ -9,6 +9,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 DEFAULT_MODEL = os.getenv("MATH_AGENT_DEFAULT_MODEL", "gpt-4o-mini")
 STRONG_MODEL = os.getenv("MATH_AGENT_STRONG_MODEL", "gpt-4o")
+# Figure Pipeline 是唯一需要多模态（视觉）能力的节点，单独配置以便选用支持图像的模型。
+# 默认回退到 STRONG_MODEL，保持向后兼容。
+FIGURE_MODEL = os.getenv("MATH_AGENT_FIGURE_MODEL", STRONG_MODEL)
 
 # 节点 -> 模型 的路由表。便于 Critic 用强模型，常规节点用便宜模型。
 MODEL_ROUTING = {
@@ -17,13 +20,14 @@ MODEL_ROUTING = {
     "model_critic": STRONG_MODEL,
     "coder": DEFAULT_MODEL,
     "writer": STRONG_MODEL,
-    "figure_critic": STRONG_MODEL,   # 多模态
+    "figure_critic": FIGURE_MODEL,    # 多模态：图像质量评审
+    "figure_analyst": FIGURE_MODEL,   # 多模态：图说生成
     "paper_critic": STRONG_MODEL,
     "evaluation": STRONG_MODEL,
 }
 
 # 循环 / 重试上限
-MAX_MODEL_ITERATIONS = 3       # basic -> improved -> final 之外的修正轮次
+MAX_MODEL_ITERATIONS = int(os.getenv("MATH_AGENT_MAX_MODEL_ITERATIONS", "3"))
 MAX_WRITER_ITERATIONS = 2      # paper_critic 未通过时 writer 最多重写次数
 MAX_LLM_RETRIES = 2            # 单次 LLM 调用的结构化解析重试
 MAX_CODE_RETRIES = 1           # coder / sensitivity 沙箱失败后再给一次机会，避免成本失控

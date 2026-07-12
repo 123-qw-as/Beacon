@@ -235,7 +235,7 @@ def table_assembler_node(state: MathModelingState) -> dict:
     paper.sensitivity = _inject_table(paper.sensitivity, "敏感性结果汇总表", sens_table)
 
     # 对比表（从 baseline artifacts 提取）
-    comp_table = _generate_comparison_table(state.code_artifacts)
+    comp_table = _generate_comparison_table(state.latest_code_artifacts())
     paper.solution = _inject_table(paper.solution, "各方案结果对比表", comp_table)
 
     # 2) 禁用词清洗（所有 section）

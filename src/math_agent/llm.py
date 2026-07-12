@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -23,12 +24,15 @@ _pl.propagate = False
 _pl.handlers.clear()
 _pl.addHandler(_logging.NullHandler())
 
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+os.environ.setdefault("LITELLM_LOG", "CRITICAL")
+os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
+os.environ.setdefault("no_proxy", "localhost,127.0.0.1")
+
 import litellm
 # 关掉 litellm 自带的各种 print 调试输出（Provider List 横幅 / cost map fetch 警告）
 litellm.suppress_debug_info = True
 litellm.set_verbose = False
-import os
-os.environ.setdefault("LITELLM_LOG", "CRITICAL")
 # 强制本地 LLM 调用不走系统代理（Windows clash/v2ray 常设系统代理，
 # httpx 会读系统代理设置把 localhost:20128 的请求也走代理转发，导致
 # 代理转发本地请求时 socket read 永久阻塞。NO_PROXY 让 localhost 直连。
@@ -105,8 +109,6 @@ def _completion_with_retry(*, _retry_attempts=None, _retry_base_delay=1.0, **kw)
 
 
 # ---- 可选 callback（仅当对应环境变量存在时启用） ----
-
-import os
 
 _LITELLM_CALLBACKS_CONFIGURED = False
 
@@ -239,7 +241,7 @@ def complete(
 
 
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
 
 
 def _extract_json(content: str) -> str:
@@ -250,12 +252,32 @@ def _extract_json(content: str) -> str:
     2. 前导/尾随非 JSON 文本（markdown 代码块、解释文字）：提取第一个 {...} 块。
     """
     cleaned = _THINK_TAG_RE.sub("", content).strip()
-    if cleaned.startswith("{"):
+    start = cleaned.find("{")
+    if start == -1:
         return cleaned
-    m = _JSON_OBJECT_RE.search(cleaned)
-    if m:
-        return m.group(0)
-    return cleaned
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(cleaned)):
+        ch = cleaned[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return cleaned[start:i + 1]
+    return cleaned[start:]
 
 
 def _parse_json_with_latex_repair(

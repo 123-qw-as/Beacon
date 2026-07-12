@@ -317,3 +317,53 @@ def test_section_prompt_contains_iron_rules(mocker):
     for p in prompts:
         assert "IRON RULES" in p
         assert "禁编造数据" in p
+
+
+def test_writer_retry_reuses_first_outline(mocker):
+    side, calls = _make_complete_side_effect()
+    mocker.patch("math_agent.nodes.writer.complete", side_effect=side)
+    s = _rich_state()
+    s.writer_iteration = 1
+    s.writer_outline_dump = WriterOutline(solution="保留的求解锚点").model_dump()
+    s.critic_reports.append(CriticReport(
+        target="paper", score=4, approved=False,
+        issues=[CriticIssue(section="solution", problem="需重写")],
+    ))
+
+    delta = writer_node(s)
+
+    assert delta["writer_outline_dump"]["solution"] == "保留的求解锚点"
+    assert WriterOutline not in calls
+
+
+def test_available_numbers_ignores_non_result_debug_values():
+    from math_agent.prompts.writer_section import _extract_available_numbers
+    from math_agent.state import CodeArtifact
+    s = _rich_state()
+    s.code_artifacts = [CodeArtifact(
+        purpose="实验", code="", success=True,
+        stdout="epoch=99 loss=0.1\nRESULT: baseline=ours cost=12.5 service=0.9",
+    )]
+    numbers = _extract_available_numbers(s)
+    assert "RESULT:" in numbers
+    assert "cost=12.5" in numbers
+    assert "epoch=99" not in numbers
+
+
+def test_available_numbers_ignores_old_coder_batches():
+    from math_agent.prompts.writer_section import _extract_available_numbers
+    from math_agent.state import CodeArtifact
+    state = _rich_state()
+    state.code_artifacts = [
+        CodeArtifact(
+            purpose="old", code="", success=True, batch=1,
+            stdout="RESULT: baseline=old cost=999",
+        ),
+        CodeArtifact(
+            purpose="new", code="", success=True, batch=2,
+            stdout="RESULT: baseline=ours cost=100",
+        ),
+    ]
+    numbers = _extract_available_numbers(state)
+    assert "999" not in numbers
+    assert "100" in numbers

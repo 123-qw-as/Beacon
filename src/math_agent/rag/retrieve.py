@@ -29,9 +29,10 @@ def search(
     db_path = Path(db_path)
     if not db_path.exists():
         return []
-    vec = embed_texts([query], model=embedding_model)[0]
     store = VectorStore.open(db_path, dim=dim)
     try:
+        # 先打开并校验库维度，再付费调用 embedding；配置错误不应消耗 API。
+        vec = embed_texts([query], model=embedding_model)[0]
         rows = store.search(vec, k=k, source_type=source_type)
         # 过滤无结果 → 退回全库 top-k，避免 writer 要论文却只有 model_lib 时返空。
         if not rows and source_type is not None:

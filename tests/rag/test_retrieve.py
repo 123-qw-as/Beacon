@@ -137,3 +137,14 @@ def test_search_no_filter_works_as_before(mocker, workdir):
     out = search("q", db_path=workdir / "vec.db", k=10, dim=3,
                  embedding_model="m")
     assert len(out) == 2
+
+
+def test_search_checks_store_dimension_before_embedding(mocker, workdir):
+    from math_agent.rag.store import VectorStore
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.close()
+    embed = mocker.patch("math_agent.rag.retrieve.embed_texts")
+    import pytest
+    with pytest.raises(ValueError, match="dim"):
+        search("q", db_path=workdir / "vec.db", k=1, dim=4, embedding_model="m")
+    embed.assert_not_called()

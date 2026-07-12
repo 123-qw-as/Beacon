@@ -1,3 +1,8 @@
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 from pydantic import BaseModel
 import math_agent.llm as llm
@@ -375,3 +380,34 @@ def test_repair_string_preserves_normal_paragraph_after_math():
     normal = "$x$ 后\n下一句"
     out = llm._repair_string(normal)
     assert out == normal, f"误转: {out!r}"
+
+
+def test_extract_json_stops_at_first_balanced_object():
+    content = 'prefix {"value": "brace } in string", "nested": {"x": 1}} suffix {"other": 2}'
+    assert llm._extract_json(content) == '{"value": "brace } in string", "nested": {"x": 1}}'
+
+
+def test_litellm_uses_local_cost_map_before_import():
+    """全新进程导入时应默认禁用 LiteLLM 的远端价格表请求。"""
+    env = os.environ.copy()
+    env.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+    source_dir = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_dir, env.get("PYTHONPATH", "")) if part
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os; import math_agent.llm; "
+            "print(os.environ['LITELLM_LOCAL_MODEL_COST_MAP'])",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"
+    assert "model cost map" not in result.stderr.lower()

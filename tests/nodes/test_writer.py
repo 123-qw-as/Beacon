@@ -97,6 +97,16 @@ def test_render_markdown_contains_sections():
     assert "print(1)" in md
 
 
+def test_render_markdown_normalizes_and_quotes_figure_paths():
+    from math_agent.state import FigureArtifact
+    state = MathModelingState(problem="P")
+    state.figures.append(FigureArtifact(
+        path=r"C:\runs\my figure.png", purpose="图",
+    ))
+    markdown = render_markdown(state)
+    assert "![](C:/runs/my%20figure.png)" in markdown
+
+
 # ---- build_prompt: 上游素材完整传递 ----
 
 def test_prompt_includes_each_assumption_with_rationale():

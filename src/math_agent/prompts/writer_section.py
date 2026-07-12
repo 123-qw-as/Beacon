@@ -154,7 +154,7 @@ def _group_by_name(name: str) -> SectionGroup:
 import re as _re
 # 提取 stdout 中的 RESULT: 行和 key=value 数值对，供 writer 引用
 _RESULT_NUM_RE = _re.compile(
-    r"(?:RESULT:\s*\S+\s+)?((?:\w+=\s*-?\d+\.?\d*(?:[eE][+-]?\d+)?\s*)+)",
+    r"^RESULT:\s*\S+\s+((?:\w+=\s*-?\d+\.?\d*(?:[eE][+-]?\d+)?\s*)+)$",
     _re.MULTILINE,
 )
 
@@ -165,7 +165,7 @@ def _extract_available_numbers(state: MathModelingState) -> str:
     让 writer "只能用这些数值"，比 IRON RULE 的禁令更有效。
     """
     lines: list[str] = []
-    for a in state.code_artifacts:
+    for a in state.latest_code_artifacts():
         if not a.success or not a.stdout:
             continue
         # 提取 RESULT: 行

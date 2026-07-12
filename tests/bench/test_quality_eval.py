@@ -109,12 +109,28 @@ def test_quality_eval_fails_with_consistency_not_approved():
     assert q.code < 7
 
 
+def test_quality_eval_fails_when_required_consistency_report_missing():
+    state = _passing_state()
+    state.model_code_reports = []
+    quality = evaluate_quality(state, "2022_A")
+    assert quality.code < 7
+    assert not quality.passed
+
+
 def test_quality_eval_fails_with_missing_keywords():
     s = _passing_state()
     s.paper = PaperSections(abstract="nothing relevant here")
     q = evaluate_quality(s, "2022_A")
     assert not q.passed
     assert q.paper < 7
+
+
+def test_quality_eval_fails_when_required_evaluation_missing():
+    state = _passing_state()
+    state.evaluation = None
+    quality = evaluate_quality(state, "2022_A")
+    assert quality.paper < 7
+    assert not quality.passed
 
 
 def test_quality_eval_question_coverage():
@@ -144,3 +160,10 @@ def test_quality_eval_failing_state_all_below_threshold():
     assert not q.passed
     assert q.overall < 7.2
     assert len(q.failures) >= 4  # all four dimensions below threshold
+
+
+def test_quality_eval_supports_fully_serialized_state():
+    state_dict = _passing_state().model_dump()
+    q = evaluate_quality(state_dict, "2022_A")
+    assert q.passed, q.failures
+    assert q.question_coverage == "1/2"

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from math_agent.config import MODEL_ROUTING
 from math_agent.llm import complete
@@ -21,7 +21,7 @@ from math_agent.tools.image import inspect_image, encode_image_to_data_url
 
 
 class FigureCriticOut(BaseModel):
-    score: int
+    score: int = Field(ge=0, le=10)
     issues: list[str] = []
     suggestions: list[str] = []
     approved: bool = False
@@ -37,14 +37,18 @@ _MAX_CRITIC_RETRIES = 1  # critic 不通过时，最多再问一次（不重新�
 def _collect_pngs(state: MathModelingState) -> list[tuple[str, str, str]]:
     """返回 [(path, purpose, context_text), ...]"""
     out: list[tuple[str, str, str]] = []
-    for art in state.code_artifacts:
+    seen: set[str] = set()
+    for art in state.latest_code_artifacts():
         if not art.success:
             continue
         for p in art.artifact_paths:
-            if p.lower().endswith(".png"):
+            if p.lower().endswith(".png") and p not in seen:
+                seen.add(p)
                 out.append((p, art.purpose, art.stdout[:500]))
     for r in state.sensitivity_runs:
-        if r.figure_path and r.figure_path.lower().endswith(".png"):
+        if (r.figure_path and r.figure_path.lower().endswith(".png")
+                and r.figure_path not in seen):
+            seen.add(r.figure_path)
             ctx = f"parameter={r.parameter} values={r.values} {r.metric}={r.results}"
             out.append((r.figure_path, f"敏感性分析: {r.parameter}", ctx))
     return out
@@ -52,17 +56,22 @@ def _collect_pngs(state: MathModelingState) -> list[tuple[str, str, str]]:
 
 def figure_pipeline_node(state: MathModelingState) -> dict:
     figures: list[FigureArtifact] = []
+    errors: list[str] = []
     for path, purpose, context in _collect_pngs(state):
-        info = inspect_image(path)
+        try:
+            info = inspect_image(path)
+            url = encode_image_to_data_url(path)
+        except (OSError, ValueError) as exc:
+            errors.append(f"figure_pipeline: 无法读取图像 {path}: {exc}")
+            continue
         meta = f"{info.width}x{info.height}px, dpi={info.dpi}"
-        url = encode_image_to_data_url(path)
 
         critic: FigureCriticOut | None = None
         for _ in range(_MAX_CRITIC_RETRIES + 1):
             critic = complete(
                 fc_prompt(purpose, meta),
                 schema=FigureCriticOut, system=FC_SYSTEM,
-                model=MODEL_ROUTING.get("figure_critic", MODEL_ROUTING["model_critic"]),
+                model=MODEL_ROUTING["figure_critic"],
                 images=[url],
             )
             if critic.approved:
@@ -71,7 +80,7 @@ def figure_pipeline_node(state: MathModelingState) -> dict:
         analysis: FigureAnalysisOut = complete(
             fa_prompt(purpose, context),
             schema=FigureAnalysisOut, system=FA_SYSTEM,
-            model=MODEL_ROUTING.get("writer"),
+            model=MODEL_ROUTING["figure_analyst"],
             images=[url],
         )
 
@@ -83,4 +92,9 @@ def figure_pipeline_node(state: MathModelingState) -> dict:
             analysis=analysis.analysis,
         ))
 
-    return {"figures": figures} if figures else {}
+    delta: dict = {}
+    if figures:
+        delta["figures"] = figures
+    if errors:
+        delta["errors"] = errors
+    return delta

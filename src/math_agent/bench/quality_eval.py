@@ -61,7 +61,7 @@ def _score_blueprint(state, rubric: dict) -> tuple[int, list[str]]:
     spec = rubric.get("blueprint", {})
     score = 10
 
-    subqs = getattr(bp, "subquestions", []) or []
+    subqs = _get(bp, "subquestions", []) or []
     min_sq = spec.get("min_subquestions", 0)
     if len(subqs) < min_sq:
         score -= PENALTY_MEDIUM
@@ -76,7 +76,7 @@ def _score_blueprint(state, rubric: dict) -> tuple[int, list[str]]:
     ]
     for flag, attr in checks:
         if spec.get(flag):
-            val = getattr(bp, attr, None)
+            val = _get(bp, attr, None)
             if not val:
                 score -= PENALTY_MINOR
                 issues.append(f"blueprint missing {attr}")
@@ -95,20 +95,20 @@ def _score_model(state, rubric: dict) -> tuple[int, list[str]]:
     score = 10
 
     if spec.get("must_have_question_coverage"):
-        cov = getattr(model, "question_coverage", []) or []
+        cov = _get(model, "question_coverage", []) or []
         if not cov:
             score -= PENALTY_MEDIUM
             issues.append("missing question_coverage")
 
     min_deriv = spec.get("must_have_derivation_steps", 0)
-    steps = len(getattr(model, "derivation_steps", []) or [])
+    steps = len(_get(model, "derivation_steps", []) or [])
     if min_deriv and steps < min_deriv:
         score -= PENALTY_MINOR
         issues.append(f"derivation_steps {steps} < {min_deriv}")
 
     if spec.get("must_have_baseline"):
-        notes = getattr(model, "notes", "") or ""
-        desc = getattr(model, "description", "") or ""
+        notes = _get(model, "notes", "") or ""
+        desc = _get(model, "description", "") or ""
         # ponytail: 宽松匹配 baseline 关键词，避免对 LLM 措辞过度敏感
         if "baseline" not in (notes + desc).lower():
             score -= PENALTY_LIGHT
@@ -157,7 +157,7 @@ def _score_code(state, rubric: dict) -> tuple[int, list[str]]:
                 score -= PENALTY_SEVERE
                 issues.append("model_code_consistency not approved")
         else:
-            score -= PENALTY_MINOR
+            score -= PENALTY_SEVERE
             issues.append("no model_code_reports")
 
     return max(0, score), issues
@@ -173,7 +173,7 @@ def _score_paper(state, rubric: dict) -> tuple[int, list[str]]:
 
     score = 10
     text = " ".join([
-        getattr(paper, f, "") or ""
+        _get(paper, f, "") or ""
         for f in ("abstract", "model_section", "solution", "conclusion")
     ])
     for kw in spec.get("must_contain_keywords", []):
@@ -183,11 +183,14 @@ def _score_paper(state, rubric: dict) -> tuple[int, list[str]]:
 
     evaluation = _get(state, "evaluation")
     if evaluation is not None:
-        overall = float(getattr(evaluation, "overall", 0))
+        overall = float(_get(evaluation, "overall", 0))
         min_overall = spec.get("min_overall", 0)
         if overall < min_overall:
             score -= PENALTY_MINOR
             issues.append(f"evaluation overall {overall} < {min_overall}")
+    elif spec.get("min_overall", 0) > 0:
+        score -= PENALTY_SEVERE
+        issues.append("missing evaluation")
 
     # paper_critic 是否通过
     critics = _get(state, "critic_reports") or []
@@ -234,8 +237,8 @@ def evaluate_quality(state, problem_id: str) -> QualityScore:
     # question_coverage 摘要
     models = _get(state, "model_versions") or []
     bp = _get(state, "problem_blueprint")
-    total_sq = len(getattr(bp, "subquestions", []) or []) if bp else 0
-    covered = len(getattr(models[-1], "question_coverage", []) or []) if models else 0
+    total_sq = len(_get(bp, "subquestions", []) or []) if bp else 0
+    covered = len(_get(models[-1], "question_coverage", []) or []) if models else 0
     coverage_str = f"{covered}/{total_sq}" if total_sq else f"{covered}/0"
 
     return QualityScore(

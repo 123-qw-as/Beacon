@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "start": "node frontend/server.mjs",
-    "dev": "node --watch frontend/server.mjs"
+    "dev": "node --watch frontend/server.mjs",
+    "test": "node --test frontend/server.test.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.0"

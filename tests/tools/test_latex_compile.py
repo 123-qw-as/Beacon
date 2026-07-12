@@ -29,6 +29,7 @@ def test_compile_latex_returns_failure_when_xelatex_missing(monkeypatch, workdir
     res = compile_latex(tex)
     assert not res.success
     assert "xelatex" in res.log.lower()
+    assert "xelatex" in (workdir / "compile.log").read_text(encoding="utf-8").lower()
 
 
 def test_latex_result_carries_error_kind_when_missing(monkeypatch, workdir):
@@ -37,3 +38,20 @@ def test_latex_result_carries_error_kind_when_missing(monkeypatch, workdir):
     tex.write_text(r"\documentclass{article}\begin{document}x\end{document}", encoding="utf-8")
     res = compile_latex(tex)
     assert res.error_kind == "missing_binary"
+
+
+def test_compile_latex_does_not_accept_stale_pdf(mocker, workdir):
+    tex = workdir / "main.tex"
+    tex.write_text(r"\documentclass{article}", encoding="utf-8")
+    stale = workdir / "main.pdf"
+    stale.write_bytes(b"old pdf")
+    mocker.patch("math_agent.tools.latex_compile.shutil.which", return_value="xelatex")
+    mocker.patch(
+        "math_agent.tools.latex_compile.subprocess.run",
+        return_value=mocker.MagicMock(returncode=1, stdout="Emergency stop", stderr=""),
+    )
+    res = compile_latex(tex)
+    assert not res.success
+    assert res.error_kind == "compile"
+    assert not stale.exists()
+    assert "Emergency stop" in (workdir / "compile.log").read_text(encoding="utf-8")

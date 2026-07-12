@@ -144,20 +144,53 @@ class VectorStore:
         self._conn.commit()
         return new_count
 
+    def missing_chunks(self, chunks: list[Chunk]) -> list[Chunk]:
+        """返回库中尚不存在的块，供 ingest 在调用 embedding API 前去重。"""
+        existing_by_source: dict[str, set[str]] = {}
+        result: list[Chunk] = []
+        for chunk in chunks:
+            if chunk.source not in existing_by_source:
+                rows = self._conn.execute(
+                    "SELECT content_hash FROM chunks WHERE source = ?",
+                    (chunk.source,),
+                )
+                existing_by_source[chunk.source] = {row[0] for row in rows if row[0]}
+            content_hash = _content_hash(chunk.text)
+            known = existing_by_source[chunk.source]
+            if content_hash in known:
+                continue
+            known.add(content_hash)  # 同一批次内也去重
+            result.append(chunk)
+        return result
+
     def search(self, query: list[float], *, k: int = 5,
                source_type: str | None = None) -> list[StoredChunk]:
         if len(query) != self._dim:
             raise ValueError(f"query dim {len(query)} != store dim {self._dim}")
+        if k <= 0:
+            raise ValueError("k must be > 0")
         # sqlite-vec 0.1.x KNN 查询要求显式 `k = ?` 约束（LIMIT 单独不够）。
+        # 元数据条件在 KNN 之后执行；若仍用 k，最邻近的 k 条恰好都属于其他
+        # source_type 时会误报空结果。过滤场景先取全库候选，再按类型取前 k。
+        search_k = k
+        if source_type is not None:
+            search_k = max(
+                k,
+                int(self._conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]),
+            )
         where = "WHERE v.embedding MATCH ? AND k = ?"
-        params: list = [_to_blob(query), k]
+        params: list = [_to_blob(query), search_k]
         if source_type is not None:
             where += " AND c.source_type = ?"
             params.append(source_type)
+            limit = " LIMIT ?"
+            params.append(k)
+        else:
+            limit = ""
         cur = self._conn.execute(
             "SELECT v.id, c.text, c.source, c.idx, v.distance, c.source_type, c.section "
             "FROM vec_chunks v JOIN chunks c ON c.id = v.id "
-            f"{where} ORDER BY v.distance",
+            f"{where} ORDER BY v.distance{limit}",
             params,
         )
         return [
