@@ -1,4 +1,4 @@
-from math_agent.rag.ingest import ingest_directory, _extract_pdf_text
+from math_agent.rag.ingest import ingest_directory, _extract_pdf_text, _normalize_math_text
 
 
 def test_ingest_directory_processes_md_files(mocker, workdir):
@@ -106,6 +106,23 @@ def test_extract_pdf_text_reconstructs_superscripts(tmp_path):
     # 不应出现裸的 22= 或 33=
     assert "22=" not in result.replace(" ", "")
     assert "33=" not in result.replace(" ", "")
+
+
+def test_normalize_math_text_fixes_neq_and_mu():
+    """Regression: LaTeX \\neq outputs as combining slash U+0338 + '=', which
+    is two chars. \\mu outputs as micro sign U+00B5, not greek mu U+03BC.
+    _normalize_math_text should fix both."""
+    # \neq: U+0338 + =
+    raw_neq = "a \u0338= b"
+    assert _normalize_math_text(raw_neq) == "a \u2260 b"
+
+    # \mu: U+00B5 -> U+03BC
+    raw_mu = "\u00b5 = 0.5"
+    assert _normalize_math_text(raw_mu) == "\u03bc = 0.5"
+
+    # other math symbols should not be affected
+    other = "\u222b \u2211 \u221e \u221a \u03b1 \u03b2 \u03b3 \u2264 \u2265"
+    assert _normalize_math_text(other) == other
 
 
 def test_ingest_directory_is_idempotent_on_rerun(mocker, workdir):

@@ -48,6 +48,23 @@ def _meta_csv(path: Path) -> dict:
                          "columns": columns, "preview": preview}]}
 
 
+def _normalize_math_text(text: str) -> str:
+    """规范化 LaTeX PDF 提取的数学文本。
+
+    - LaTeX \\neq 输出为组合短斜线 U+0338 + =，合并为 ≠ (U+2260)
+    - LaTeX \\mu 输出为 micro sign U+00B5，统一为希腊 μ (U+03BC)
+    """
+    text = text.replace("̸=", "≠")     # \neq
+    text = text.replace("̸<", "≮")     # \nless
+    text = text.replace("̸>", "≯")     # \ngtr
+    text = text.replace("̸≤", "≰")     # \nleq
+    text = text.replace("̸≥", "≱")     # \ngeq
+    text = text.replace("̸∼", "≄")     # \nsim
+    text = text.replace("̸≈", "≇")     # \napprox
+    text = text.replace("\u00b5", "\u03bc")  # micro sign -> greek mu
+    return text
+
+
 def _extract_page_with_superscripts(page) -> str:
     """用版面信息检测上标：字号明显小于基线 + y 坐标更高时，包裹为 ^{...}。
     避免 2² 被提取为 22 造成歧义。"""
@@ -86,8 +103,9 @@ def _meta_pdf(path: Path) -> dict:
         reader = PdfReader(str(path))
         raw = "\n\n".join(page.extract_text() or "" for page in reader.pages)
         total_pages = len(reader.pages)
-    # lone-surrogate 清洗
+    # lone-surrogate 清洗 + 数学符号规范化
     text = raw.encode("utf-8", errors="ignore").decode("utf-8")
+    text = _normalize_math_text(text)
     return {"text_excerpt": text[:5000], "total_pages": total_pages}
 
 
