@@ -690,6 +690,7 @@ let onboardingData = {
   apiKey: "",
   defaultModel: "",
   strongModel: "",
+  figureModel: "",
 };
 
 const onboardingSteps = [
@@ -832,6 +833,7 @@ async function renderProviderStep() {
         onboardingData.apiBase = provider.apiBase;
         onboardingData.defaultModel = provider.defaultModel;
         onboardingData.strongModel = provider.strongModel;
+        onboardingData.figureModel = provider.figureModel || provider.strongModel || "";
         onboardingNext.disabled = false;
       });
     });
@@ -886,25 +888,36 @@ function renderModelTestStep() {
       <span>强力模型（分析、建模、写作、评审）</span>
       <input id="obStrongModel" value="${escapeHtml(onboardingData.strongModel)}" style="width:100%;height:42px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;color:var(--ink);background:var(--white);outline:0;" />
     </div>
+    <div class="field">
+      <span>图像模型（图表评审与图说生成）</span>
+      <input id="obFigureModel" value="${escapeHtml(onboardingData.figureModel)}" style="width:100%;height:42px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;color:var(--ink);background:var(--white);outline:0;" />
+      <span class="field-hint">需支持视觉输入；留空则回退到强力模型</span>
+    </div>
     <button class="primary-button" type="button" id="obTestBtn">🔍 测试连接</button>
     <div id="obTestResult"></div>
   `;
   const dmInput = document.querySelector("#obDefaultModel");
   const smInput = document.querySelector("#obStrongModel");
+  const fmInput = document.querySelector("#obFigureModel");
   dmInput.addEventListener("input", () => { onboardingData.defaultModel = dmInput.value; });
   smInput.addEventListener("input", () => { onboardingData.strongModel = smInput.value; });
+  fmInput.addEventListener("input", () => { onboardingData.figureModel = fmInput.value; });
 
   document.querySelector("#obTestBtn").addEventListener("click", async () => {
     const result = document.querySelector("#obTestResult");
     result.innerHTML = '<p style="color:var(--muted);">测试中...</p>';
     try {
-      const [r1, r2] = await Promise.all([
+      const fm = onboardingData.figureModel || onboardingData.strongModel;
+      const [r1, r2, r3] = await Promise.all([
         testLlm(onboardingData.apiBase, onboardingData.apiKey, onboardingData.defaultModel),
         testLlm(onboardingData.apiBase, onboardingData.apiKey, onboardingData.strongModel),
+        fm ? testLlm(onboardingData.apiBase, onboardingData.apiKey, fm) : Promise.resolve(null),
       ]);
-      const html = renderTestResult("主力模型", r1) + renderTestResult("强力模型", r2);
+      let html = renderTestResult("主力模型", r1) + renderTestResult("强力模型", r2);
+      if (r3) html += renderTestResult("图像模型", r3);
       result.innerHTML = html;
-      onboardingNext.disabled = !(r1.success && r2.success);
+      const allOk = r1.success && r2.success && (!r3 || r3.success);
+      onboardingNext.disabled = !allOk;
     } catch (error) {
       result.innerHTML = `<div class="test-result fail">测试失败: ${escapeHtml(error.message)}</div>`;
     }
@@ -937,6 +950,7 @@ async function renderCompleteStep() {
         apiKey: onboardingData.apiKey,
         defaultModel: onboardingData.defaultModel,
         strongModel: onboardingData.strongModel,
+        figureModel: onboardingData.figureModel,
       }),
     });
   } catch (error) {
@@ -952,6 +966,7 @@ async function renderCompleteStep() {
         <p><strong>端点:</strong> ${escapeHtml(onboardingData.apiBase)}</p>
         <p><strong>主力模型:</strong> ${escapeHtml(onboardingData.defaultModel)}</p>
         <p><strong>强力模型:</strong> ${escapeHtml(onboardingData.strongModel)}</p>
+        <p><strong>图像模型:</strong> ${escapeHtml(onboardingData.figureModel || "(回退到强力模型)")}</p>
       </div>
     </div>
   `;
@@ -1047,6 +1062,11 @@ function renderSettingsModels() {
       <input id="setStrongModel" value="${escapeHtml(settingsConfig.strongModel)}" />
       <span class="field-hint">用于核心节点</span>
     </div>
+    <div class="field">
+      <span>图像模型（图表评审与图说生成）</span>
+      <input id="setFigureModel" value="${escapeHtml(settingsConfig.figureModel)}" />
+      <span class="field-hint">需支持视觉输入；留空则回退到强力模型</span>
+    </div>
   `;
 }
 
@@ -1103,6 +1123,7 @@ function collectSettings() {
   const apiKey = document.querySelector("#setApiKey");
   const defaultModel = document.querySelector("#setDefaultModel");
   const strongModel = document.querySelector("#setStrongModel");
+  const figureModel = document.querySelector("#setFigureModel");
   const ragToggle = document.querySelector("#setRagToggle");
   const ragEmbed = document.querySelector("#setRagEmbed");
   const ragTopK = document.querySelector("#setRagTopK");
@@ -1114,6 +1135,7 @@ function collectSettings() {
   if (apiKey && !apiKey.value.includes("***")) config.apiKey = apiKey.value;
   if (defaultModel) config.defaultModel = defaultModel.value;
   if (strongModel) config.strongModel = strongModel.value;
+  if (figureModel) config.figureModel = figureModel.value;
   if (ragToggle) config.ragEnabled = ragToggle.classList.contains("on");
   if (ragEmbed) config.ragEmbeddingModel = ragEmbed.value;
   if (ragTopK) config.ragTopK = Number(ragTopK.value);
@@ -1153,6 +1175,7 @@ settingsReset?.addEventListener("click", async () => {
         apiKey: "123456",
         defaultModel: "deepseek-v4-flash-free",
         strongModel: "deepseek-v4-flash-free",
+        figureModel: "deepseek-v4-flash-free",
         llmTimeout: 300,
         maxModelIterations: 3,
         ragEnabled: false,

@@ -12,6 +12,7 @@ const FIELD_MAP = {
   apiKey: "OPENAI_API_KEY",
   defaultModel: "MATH_AGENT_DEFAULT_MODEL",
   strongModel: "MATH_AGENT_STRONG_MODEL",
+  figureModel: "MATH_AGENT_FIGURE_MODEL",
   llmTimeout: "MATH_AGENT_LLM_TIMEOUT",
   maxModelIterations: "MATH_AGENT_MAX_MODEL_ITERATIONS",
   ragEnabled: "MATH_AGENT_RAG_ENABLED",
@@ -90,6 +91,7 @@ export async function handleConfigRoutes(request, response, url) {
       hasApiKey: !!(envVars.OPENAI_API_KEY && envVars.OPENAI_API_KEY !== "123456"),
       defaultModel: envVars.MATH_AGENT_DEFAULT_MODEL || "",
       strongModel: envVars.MATH_AGENT_STRONG_MODEL || "",
+      figureModel: envVars.MATH_AGENT_FIGURE_MODEL || "",
       llmTimeout: Number(envVars.MATH_AGENT_LLM_TIMEOUT || 300),
       maxModelIterations: Number(envVars.MATH_AGENT_MAX_MODEL_ITERATIONS || 3),
       ragEnabled: envVars.MATH_AGENT_RAG_ENABLED === "1",
@@ -113,6 +115,7 @@ export async function handleConfigRoutes(request, response, url) {
     }
     if (body.defaultModel !== undefined) updates[FIELD_MAP.defaultModel] = body.defaultModel;
     if (body.strongModel !== undefined) updates[FIELD_MAP.strongModel] = body.strongModel;
+    if (body.figureModel !== undefined) updates[FIELD_MAP.figureModel] = body.figureModel;
     if (body.llmTimeout !== undefined) updates[FIELD_MAP.llmTimeout] = String(body.llmTimeout);
     if (body.maxModelIterations !== undefined) updates[FIELD_MAP.maxModelIterations] = String(body.maxModelIterations);
     if (body.ragEnabled !== undefined) updates[FIELD_MAP.ragEnabled] = body.ragEnabled ? "1" : "0";
