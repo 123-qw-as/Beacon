@@ -28,3 +28,11 @@ corpus/papers/
 .idea/
 *.swp
 *.swo
+
+# Tooling / temp files
+.superpowers/
+.zcode/
+*.log
+test.png
+*.err.log
+*.out.log
