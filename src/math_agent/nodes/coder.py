@@ -608,6 +608,61 @@ def best_dynamic_reinsertion(source_index, moved):
                 best = candidate
     return best
 
+def replacement_event_success(source_index, moved, changed_task):
+    """先从原路线移除旧任务，再验证变更任务能否唯一重插到任一路线。"""
+    source_route = routes[source_index]
+    source_without_moved = [item for item in source_route["tasks"] if item != moved]
+    if moved in source_without_moved:
+        return False
+    if source_without_moved and evaluate_task_sequence(
+        source_without_moved, source_route["spec"]
+    ) is None:
+        return False
+    tasks.append(changed_task)
+    try:
+        changed_id = len(tasks) - 1
+        for route_index, target_route in enumerate(routes):
+            target = (
+                source_without_moved if route_index == source_index
+                else list(target_route["tasks"])
+            )
+            target_weight = sum(tasks[item]["weight"] for item in target)
+            target_volume = sum(tasks[item]["volume"] for item in target)
+            if target_weight + changed_task["weight"] > target_route["spec"]["weight"] + 1e-9:
+                continue
+            if target_volume + changed_task["volume"] > target_route["spec"]["volume"] + 1e-9:
+                continue
+            for position in range(len(target) + 1):
+                candidate = target[:position] + [changed_id] + target[position:]
+                if candidate.count(changed_id) != 1 or moved in candidate:
+                    continue
+                if evaluate_task_sequence(candidate, target_route["spec"]) is not None:
+                    return True
+        return False
+    finally:
+        tasks.pop()
+
+def new_order_event_success(new_task):
+    """把附件中的真实任务属性作为新增订单代理，并枚举全部路线。"""
+    tasks.append(dict(new_task))
+    try:
+        new_id = len(tasks) - 1
+        for target_route in routes:
+            target = list(target_route["tasks"])
+            if sum(tasks[item]["weight"] for item in target) + new_task["weight"] > target_route["spec"]["weight"] + 1e-9:
+                continue
+            if sum(tasks[item]["volume"] for item in target) + new_task["volume"] > target_route["spec"]["volume"] + 1e-9:
+                continue
+            for position in range(len(target) + 1):
+                candidate = target[:position] + [new_id] + target[position:]
+                if candidate.count(new_id) != 1:
+                    continue
+                if evaluate_task_sequence(candidate, target_route["spec"]) is not None:
+                    return True
+        return False
+    finally:
+        tasks.pop()
+
 # 以不同来源路线和任务构造可复算事件样本；每个样本从静态主方案独立开始。
 event_candidates = [
     (route_index, task_id)
@@ -696,30 +751,25 @@ for sample_index in range(event_scenarios_per_type):
     )
 
     event_trials["new_order"] += 1
-    event_success["new_order"] += int(best_dynamic_reinsertion(source_index, moved) is not None)
+    event_success["new_order"] += int(new_order_event_success(tasks[moved]))
 
     # 地址变更采用附件中另一个实际客户节点作为压力位置，避免虚构道路距离。
     event_trials["address_change"] += 1
     alternate_customer = customer_ids[(sample_index * 7 + 3) % len(customer_ids)]
     changed = dict(tasks[moved])
     changed["customer_id"] = alternate_customer
-    changed["window"] = window_map.get(alternate_customer, changed["window"])
-    tasks.append(changed)
     event_success["address_change"] += int(
-        best_dynamic_reinsertion(source_index, len(tasks) - 1) is not None
+        replacement_event_success(source_index, moved, changed)
     )
-    tasks.pop()
 
     # 时间窗收紧 60 分钟，若原窗不足 60 分钟则收紧到其中点。
     event_trials["time_window"] += 1
     changed = dict(tasks[moved])
     start_window, end_window = changed["window"]
     changed["window"] = (start_window, max(start_window, end_window - 60.0))
-    tasks.append(changed)
     event_success["time_window"] += int(
-        best_dynamic_reinsertion(source_index, len(tasks) - 1) is not None
+        replacement_event_success(source_index, moved, changed)
     )
-    tasks.pop()
 
     event_trials["vehicle_failure"] += 1
     event_success["vehicle_failure"] += int(relocate_failed_route(source_index))
@@ -743,9 +793,11 @@ def sampled_speed(minute, rng):
     return max(3.0, float(rng.normal(mean, std))) * SPEED_SCALE
 
 def simulate_fixed_routes(rng):
-    on_time = late_total = 0.0
+    on_time = late_total = wait_cost = late_cost = 0.0
+    energy_cost = emission = 0.0
     for route in routes:
         clock, previous = START_TIME, depot_id
+        onboard_weight = route["weight"]
         for task_id in route["tasks"]:
             task = tasks[task_id]
             leg = distance(previous, task["customer_id"])
@@ -756,12 +808,40 @@ def simulate_fixed_routes(rng):
                 velocity = sampled_speed(clock, rng)
                 arrival = clock + 60.0 * leg / velocity
             service = max(arrival, task["window"][0])
+            early = max(0.0, task["window"][0] - arrival)
             late = max(0.0, service - task["window"][1])
             on_time += int(late <= 1e-9)
             late_total += late
+            wait_cost += EARLY_PENALTY * early
+            late_cost += LATE_PENALTY * late
+            load_ratio = min(1.0, max(0.0, onboard_weight / route["spec"]["weight"]))
+            if route["kind"] == "fuel":
+                per_100 = 0.0025 * velocity ** 2 - 0.2554 * velocity + 31.75
+                energy = per_100 * leg / 100.0 * (1.0 + 0.40 * load_ratio)
+                unit_price, carbon_factor = 7.61, 2.547
+            else:
+                per_100 = 0.0014 * velocity ** 2 - 0.12 * velocity + 36.19
+                energy = per_100 * leg / 100.0 * (1.0 + 0.35 * load_ratio)
+                unit_price, carbon_factor = 1.64, 0.501
+            energy_cost += unit_price * energy
+            emission += carbon_factor * energy
+            onboard_weight -= task["weight"]
             clock, previous = service + SERVICE_TIME, task["customer_id"]
+        return_leg = distance(previous, depot_id)
+        velocity = sampled_speed(clock, rng)
+        if route["kind"] == "fuel":
+            per_100, unit_price, carbon_factor = (
+                0.0025 * velocity ** 2 - 0.2554 * velocity + 31.75, 7.61, 2.547
+            )
+        else:
+            per_100, unit_price, carbon_factor = (
+                0.0014 * velocity ** 2 - 0.12 * velocity + 36.19, 1.64, 0.501
+            )
+        energy = per_100 * return_leg / 100.0
+        energy_cost += unit_price * energy
+        emission += carbon_factor * energy
     rate = on_time / max(1, len(tasks))
-    scenario_cost = total_cost - total_late_cost + LATE_PENALTY * late_total
+    scenario_cost = total_fix + wait_cost + late_cost + energy_cost + 0.65 * emission
     return rate, late_total, scenario_cost
 
 rng = np.random.default_rng(MONTE_CARLO_SEED)
@@ -1124,9 +1204,83 @@ def _green_depth_evidence_error(stdout: str) -> str:
                 r"([A-Za-z_][\w]*)=(-?(?:\d+(?:\.\d+)?|\.\d+))", match.group(1)
             )
         }
-    if parsed["ROBUSTNESS"].get("scenarios", 0) < 100:
+    algorithm_required = {
+        "initial_score", "final_score", "improvement", "improvement_rate",
+        "moves", "passes", "runtime_ms",
+    }
+    robustness_required = {
+        "scenarios", "seed", "timewin_mean", "timewin_std", "timewin_p05",
+        "late_mean", "late_p95", "cost_mean", "cost_p95",
+    }
+    diagnostics_required = {
+        "late_tasks", "mean_late_min", "p95_late_min", "max_late_min",
+        "mean_weight_util", "mean_volume_util", "empty_return_ratio",
+    }
+    dynamic_required = {
+        "scenarios", "cancellation_success_rate", "new_order_success_rate",
+        "address_change_success_rate", "time_window_success_rate",
+        "vehicle_failure_success_rate", "fallback_rate",
+    }
+    for label, required_fields in (
+        ("ALGORITHM_SEARCH", algorithm_required),
+        ("ROBUSTNESS", robustness_required),
+        ("SERVICE_DIAGNOSTICS", diagnostics_required),
+        ("DYNAMIC_EVENTS", dynamic_required),
+    ):
+        missing = sorted(required_fields - set(parsed[label]))
+        if missing:
+            return f"{label} 缺少字段：{missing}"
+
+    algorithm = parsed["ALGORITHM_SEARCH"]
+    if min(algorithm[key] for key in algorithm_required) < 0:
+        return "ALGORITHM_SEARCH 数值不得为负"
+    tolerance = max(1e-3, 1e-4 * max(1.0, algorithm["initial_score"]))
+    if algorithm["final_score"] > algorithm["initial_score"] + tolerance:
+        return "ALGORITHM_SEARCH final_score 不得高于 initial_score"
+    if abs(
+        algorithm["initial_score"] - algorithm["final_score"] - algorithm["improvement"]
+    ) > tolerance:
+        return "ALGORITHM_SEARCH improvement 与初末目标差不一致"
+    expected_rate = (
+        algorithm["improvement"] / algorithm["initial_score"]
+        if algorithm["initial_score"] else 0.0
+    )
+    if not 0.0 <= algorithm["improvement_rate"] <= 1.0 or abs(
+        algorithm["improvement_rate"] - expected_rate
+    ) > 1e-4:
+        return "ALGORITHM_SEARCH improvement_rate 与目标改善量不一致"
+
+    robustness = parsed["ROBUSTNESS"]
+    if robustness["scenarios"] < 100:
         return "ROBUSTNESS 蒙特卡洛情景至少 100 个"
-    if parsed["DYNAMIC_EVENTS"].get("scenarios", 0) < 20:
+    if not (
+        0.0 <= robustness["timewin_p05"] <= 1.0
+        and 0.0 <= robustness["timewin_mean"] <= 1.0
+        and robustness["timewin_std"] >= 0.0
+        and robustness["late_mean"] >= 0.0
+        and robustness["late_p95"] >= 0.0
+        and robustness["cost_mean"] >= 0.0
+        and robustness["cost_p95"] >= 0.0
+    ):
+        return "ROBUSTNESS 概率、离散程度、晚到或成本指标不合法"
+
+    diagnostics = parsed["SERVICE_DIAGNOSTICS"]
+    if diagnostics["late_tasks"] < 0 or any(
+        diagnostics[key] < 0
+        for key in ("mean_late_min", "p95_late_min", "max_late_min")
+    ):
+        return "SERVICE_DIAGNOSTICS 任务数与晚到指标不得为负"
+    if (
+        diagnostics["mean_late_min"] > diagnostics["max_late_min"] + 1e-6
+        or diagnostics["p95_late_min"] > diagnostics["max_late_min"] + 1e-6
+    ):
+        return "SERVICE_DIAGNOSTICS 晚到均值或 P95 不得超过最大值"
+    for key in ("mean_weight_util", "mean_volume_util", "empty_return_ratio"):
+        if not 0.0 <= diagnostics[key] <= 1.0:
+            return f"SERVICE_DIAGNOSTICS 字段 {key} 超出 [0,1]"
+
+    dynamic = parsed["DYNAMIC_EVENTS"]
+    if dynamic["scenarios"] < 20:
         return "DYNAMIC_EVENTS 五类事件实验至少 20 个独立情景"
     rate_keys = (
         "cancellation_success_rate", "new_order_success_rate",
@@ -1134,11 +1288,12 @@ def _green_depth_evidence_error(stdout: str) -> str:
         "vehicle_failure_success_rate", "fallback_rate",
     )
     for key in rate_keys:
-        value = parsed["DYNAMIC_EVENTS"].get(key)
+        value = dynamic.get(key)
         if value is None or not 0.0 <= value <= 1.0:
             return f"DYNAMIC_EVENTS 字段 {key} 缺失或超出 [0,1]"
-    if parsed["ALGORITHM_SEARCH"].get("improvement", -1) < 0:
-        return "ALGORITHM_SEARCH improvement 不得为负"
+    success_mean = sum(dynamic[key] for key in rate_keys[:-1]) / 5.0
+    if abs(dynamic["fallback_rate"] - (1.0 - success_mean)) > 2e-3:
+        return "DYNAMIC_EVENTS fallback_rate 与五类成功率不一致"
     return ""
 
 

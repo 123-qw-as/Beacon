@@ -5,7 +5,11 @@ import pytest
 from pypdf import PdfWriter
 
 from math_agent.errors import FinalizationError
-from math_agent.nodes.finalizer import finalizer_node, load_verified_completion
+from math_agent.nodes.finalizer import (
+    _pdf_body_metrics,
+    finalizer_node,
+    load_verified_completion,
+)
 from math_agent.state import (
     CodeArtifact,
     CriticReport,
@@ -230,6 +234,30 @@ def test_finalizer_marks_short_competition_paper_body_degraded(workdir):
     assert report.status == "degraded"
     assert any("正文页数 8" in warning and "至少需要 20 页" in warning
                for warning in report.warnings)
+
+
+def test_pdf_body_metrics_ignores_appendix_entry_in_contents(workdir):
+    pdf = fitz.open()
+    page = pdf.new_page(width=595, height=842)
+    page.insert_text((50, 50), "Competition cover")
+    page = pdf.new_page(width=595, height=842)
+    page.insert_text((50, 50), "Contents")
+    page.insert_text((50, 65), "1. Problem Restatement ........ 3")
+    page.insert_text((50, 80), "Appendix A Key Algorithm Code ........ 23")
+    for page_number in range(20):
+        page = pdf.new_page(width=595, height=842)
+        heading = "1. Problem Restatement" if page_number == 0 else f"Body section {page_number + 1}"
+        page.insert_text((50, 50), heading)
+        page.insert_text((50, 80), "model data experiment result analysis " * 10)
+    page = pdf.new_page(width=595, height=842)
+    page.insert_text((50, 50), "Appendix A Key Algorithm Code")
+    pdf_path = workdir / "with-contents.pdf"
+    pdf.save(pdf_path)
+    pdf.close()
+
+    total, body_pages, nonempty_pages, body_chars = _pdf_body_metrics(pdf_path)
+    assert (total, body_pages, nonempty_pages) == (23, 20, 20)
+    assert body_chars > 6000
 
 
 def test_finalizer_rejects_stale_sensitivity_history_in_paper(workdir):

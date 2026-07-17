@@ -130,16 +130,23 @@ def _pdf_body_metrics(pdf_path: Path) -> tuple[int, int, int, int]:
     避免通过空白页、纯图片占位或把代码附录拉长来满足竞赛论文篇幅门禁。
     """
     texts = [(page.extract_text() or "") for page in PdfReader(str(pdf_path)).pages]
+    body_start = 0
+    for index, text in enumerate(texts):
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        if re.match(
+            r"^1\s*[.、]\s*(?:问题(?:重述|分析)|Problem(?:\s+Restatement)?)(?:\s|$)",
+            first_line,
+            re.I,
+        ):
+            body_start = index
+            break
     appendix_index = len(texts)
     for index, text in enumerate(texts):
-        compact = "".join(text.split())
-        if (
-            "关键算法代码" in compact
-            or re.search(r"(?mi)^\s*(?:附录|Appendix)\b", text)
-        ):
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        if re.match(r"^(?:附录(?:\s*[A-ZＡ-Ｚ一二三四五六七八九十])?|Appendix\b)", first_line, re.I):
             appendix_index = index
             break
-    body = texts[:appendix_index]
+    body = texts[body_start:appendix_index]
     nonempty_pages = sum(bool("".join(text.split())) for text in body)
     nonspace_chars = sum(len("".join(text.split())) for text in body)
     return len(texts), len(body), nonempty_pages, nonspace_chars

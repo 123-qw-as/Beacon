@@ -584,6 +584,12 @@ def test_green_logistics_solver_emits_competition_depth_evidence(tmp_path):
     assert "stress_sample_count = min(30" in code
     assert "MONTE_CARLO_SCENARIOS = 200" in code
     assert "def improve_routes_with_two_opt" in code
+    assert "source_without_moved" in code
+    assert "candidate.count(changed_id) != 1" in code
+    assert "def new_order_event_success" in code
+    assert 'new_order_event_success(tasks[moved])' in code
+    assert 'changed["window"] = window_map.get(alternate_customer' not in code
+    assert "scenario_cost = total_fix + wait_cost + late_cost + energy_cost + 0.65 * emission" in code
     # 与题面电耗公式保持一致，防止论文和代码使用近似错式。
     assert "0.0014 * velocity ** 2 - 0.12 * velocity + 36.19" in code
 
@@ -778,9 +784,12 @@ def test_green_depth_evidence_gate_requires_statistical_and_dynamic_experiments(
     assert "ROBUSTNESS" in _green_depth_evidence_error(incomplete)
 
     complete = (
-        "ALGORITHM_SEARCH: initial_score=10 final_score=9 improvement=1 improvement_rate=.1\n"
-        "ROBUSTNESS: scenarios=200 timewin_mean=.9 timewin_p05=.8 cost_p95=120\n"
-        "SERVICE_DIAGNOSTICS: late_tasks=2 max_late_min=15 mean_weight_util=.7\n"
+        "ALGORITHM_SEARCH: initial_score=10 final_score=9 improvement=1 improvement_rate=.1 "
+        "moves=1 passes=2 runtime_ms=3\n"
+        "ROBUSTNESS: scenarios=200 seed=2026 timewin_mean=.9 timewin_std=.02 "
+        "timewin_p05=.8 late_mean=10 late_p95=20 cost_mean=100 cost_p95=120\n"
+        "SERVICE_DIAGNOSTICS: late_tasks=2 mean_late_min=8 p95_late_min=14 "
+        "max_late_min=15 mean_weight_util=.7 mean_volume_util=.5 empty_return_ratio=.4\n"
         "DYNAMIC_EVENTS: scenarios=50 cancellation_success_rate=1 new_order_success_rate=.7 "
         "address_change_success_rate=.6 time_window_success_rate=.5 "
         "vehicle_failure_success_rate=.4 fallback_rate=.36\n"
@@ -789,3 +798,12 @@ def test_green_depth_evidence_gate_requires_statistical_and_dynamic_experiments(
 
     too_shallow = complete.replace("scenarios=200", "scenarios=20", 1)
     assert "至少 100" in _green_depth_evidence_error(too_shallow)
+
+    invalid_probability = complete.replace("timewin_mean=.9", "timewin_mean=9")
+    assert "ROBUSTNESS" in _green_depth_evidence_error(invalid_probability)
+
+    inconsistent_search = complete.replace("improvement=1", "improvement=2")
+    assert "不一致" in _green_depth_evidence_error(inconsistent_search)
+
+    missing_diagnostic = complete.replace("mean_volume_util=.5 ", "")
+    assert "SERVICE_DIAGNOSTICS 缺少字段" in _green_depth_evidence_error(missing_diagnostic)

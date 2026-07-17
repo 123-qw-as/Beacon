@@ -8,7 +8,9 @@ from math_agent.nodes.coder import (
     _green_logistics_template_code,
     _safe_baseline_draft,
     _safe_solver_model_contract,
+    _validated_execution,
 )
+from math_agent.nodes.finalizer import _pdf_body_metrics
 from math_agent.nodes.latex_node import latex_node
 from math_agent.nodes.model_code_consistency import _verified_green_contract_report
 from math_agent.nodes.sensitivity import (
@@ -89,6 +91,8 @@ def build(source_state: Path, data_dir: Path, out: Path) -> None:
     state.output_dir = str(out.resolve())
     state.data_dir = str(data_dir.resolve())
     state.latex_template = "gmcm"
+    for info in state.data_files:
+        info.path = str((data_dir / info.filename).resolve())
 
     main_code = _green_logistics_template_code(str(data_dir))
     expected = [data_dir / name for name in ("订单信息.xlsx", "距离矩阵.xlsx", "时间窗.xlsx", "客户坐标信息.xlsx")]
@@ -100,6 +104,15 @@ def build(source_state: Path, data_dir: Path, out: Path) -> None:
     )
     if not main_result.success:
         raise RuntimeError(main_result.stderr)
+    main_valid, main_reason, _ = _validated_execution(
+        state,
+        {"kind": "figure", "category": "figure"},
+        main_result,
+        code=main_code,
+        require_data_usage=True,
+    )
+    if not main_valid:
+        raise RuntimeError(f"主方案未通过正式证据门禁：{main_reason}")
     primary = _artifact("内容增强主方案", main_code, main_result, category="figure", role="primary")
 
     baselines: list[CodeArtifact] = []
@@ -115,6 +128,15 @@ def build(source_state: Path, data_dir: Path, out: Path) -> None:
         )
         if not result.success:
             raise RuntimeError(f"基线 {category} 失败：{result.stderr}")
+        baseline_valid, baseline_reason, _ = _validated_execution(
+            state,
+            {"kind": "baseline", "category": category},
+            result,
+            code=draft.code,
+            require_data_usage=False,
+        )
+        if not baseline_valid:
+            raise RuntimeError(f"基线 {category} 未通过正式数值门禁：{baseline_reason}")
         baselines.append(_artifact(name, draft.code, result, category=f"baseline:{category}", role="baseline"))
     state.code_artifacts = [primary, *baselines]
 
@@ -174,6 +196,12 @@ def build(source_state: Path, data_dir: Path, out: Path) -> None:
     latex_delta = latex_node(state)
     if latex_delta.get("errors"):
         raise RuntimeError("；".join(latex_delta["errors"]))
+    total_pages, body_pages, nonempty_pages, body_chars = _pdf_body_metrics(out / "paper.pdf")
+    if body_pages < 20 or nonempty_pages != body_pages or body_chars < 15000:
+        raise RuntimeError(
+            "论文篇幅门禁失败："
+            f"total={total_pages}, body={body_pages}, nonempty={nonempty_pages}, chars={body_chars}"
+        )
     (out / "final_state.json").write_text(state.model_dump_json(indent=2), encoding="utf-8")
     print(main_result.stdout, end="")
     print(sensitivity_result.stdout, end="")
