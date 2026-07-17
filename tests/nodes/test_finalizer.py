@@ -121,6 +121,16 @@ def test_finalizer_marks_existing_nonfatal_errors_as_degraded(workdir):
     assert "rag: embedding unavailable" in delta["finalization"].warnings
 
 
+def test_finalizer_degrades_green_solver_without_depth_experiments(workdir):
+    state = _ready_state(workdir)
+    state.code_artifacts[0].code = "# BEACON_GREEN_LOGISTICS_SAFE_SOLVER"
+
+    delta = finalizer_node(state)
+
+    assert delta["finalization"].status == "degraded"
+    assert any("ROBUSTNESS" in warning for warning in delta["finalization"].warnings)
+
+
 def test_finalizer_ignores_recovered_historical_coder_error(workdir):
     state = _ready_state(workdir)
     state.errors.append("coder: all code tasks failed")

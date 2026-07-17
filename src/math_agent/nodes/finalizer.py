@@ -255,6 +255,10 @@ def _collect_quality_warnings(state: MathModelingState, out: Path) -> list[str]:
     upper_bound = infer_entity_upper_bound(state.data_files)
     valid_main = 0
     valid_baseline_categories: set[str] = set()
+    green_depth_labels = (
+        "ALGORITHM_SEARCH", "ROBUSTNESS", "SERVICE_DIAGNOSTICS", "DYNAMIC_EVENTS",
+    )
+    green_depth_missing: set[str] = set()
     for artifact in state.latest_code_artifacts():
         if not artifact.success:
             continue
@@ -272,10 +276,20 @@ def _collect_quality_warnings(state: MathModelingState, out: Path) -> list[str]:
             continue
         if artifact.category == "figure" and artifact.evidence_role == "primary":
             valid_main += 1
+            if "BEACON_GREEN_LOGISTICS_SAFE_SOLVER" in (artifact.code or ""):
+                green_depth_missing.update(
+                    label for label in green_depth_labels
+                    if f"{label}:" not in (artifact.stdout or "")
+                )
         elif artifact.category.startswith("baseline:") and artifact.evidence_role == "baseline":
             valid_baseline_categories.add(artifact.category)
     if valid_main == 0:
         warnings.append("质量门禁：缺少通过协议与合理性校验的主方案 RESULT")
+    if green_depth_missing:
+        warnings.append(
+            "质量门禁：城市物流主方案缺少深度实验："
+            + "、".join(sorted(green_depth_missing))
+        )
     if len(valid_baseline_categories) < 2:
         warnings.append(
             f"质量门禁：有效对照方案仅 {len(valid_baseline_categories)} 个，至少需要 2 个"

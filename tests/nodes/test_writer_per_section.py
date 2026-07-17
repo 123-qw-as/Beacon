@@ -390,6 +390,34 @@ def test_available_numbers_ignores_old_coder_batches():
     assert "100" in numbers
 
 
+def test_writer_evidence_keeps_verified_depth_lines_for_primary_solver():
+    from math_agent.prompts.writer_section import _compact_code_artifacts, _extract_available_numbers
+    from math_agent.state import CodeArtifact
+
+    state = _rich_state()
+    state.code_artifacts = [CodeArtifact(
+        purpose="主方案",
+        code="# BEACON_GREEN_LOGISTICS_SAFE_SOLVER",
+        success=True,
+        evidence_role="primary",
+        stdout=(
+            "RESULT: baseline=ours total_cost=100 vehicles=2 service_rate=1\n"
+            "ALGORITHM_SEARCH: initial_score=120 final_score=100 improvement_rate=.1667\n"
+            "ROBUSTNESS: scenarios=200 timewin_p05=.81 cost_p95=121\n"
+            "SERVICE_DIAGNOSTICS: late_tasks=14 max_late_min=42\n"
+            "DYNAMIC_EVENTS: scenarios=50 new_order_success_rate=.72 fallback_rate=.32\n"
+        ),
+    )]
+
+    compact = _compact_code_artifacts(state)
+    numbers = _extract_available_numbers(state)
+
+    assert "ROBUSTNESS: scenarios=200" in compact[0].stdout
+    assert "DYNAMIC_EVENTS: scenarios=50" in compact[0].stdout
+    assert "cost_p95=121" in numbers
+    assert "max_late_min=42" in numbers
+
+
 def test_writer_evidence_rejects_exit_zero_errors_and_impossible_counts():
     from math_agent.prompts.writer_section import _compact_code_artifacts, _extract_available_numbers
     from math_agent.state import CodeArtifact, DataFileInfo

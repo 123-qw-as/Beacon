@@ -143,6 +143,9 @@ LATE_PENALTY = 50.0 / 60.0
 POLICY_ENABLED = True
 USE_TIME_VARYING_SPEED = True
 STRATEGY = "cost_aware"
+LOCAL_SEARCH_ENABLED = True
+MONTE_CARLO_SCENARIOS = 200
+MONTE_CARLO_SEED = 2026
 
 # 题面给定的五类有限车队；每个实例在单日计划中至多启用一次。
 VEHICLE_TYPES = [
@@ -374,6 +377,81 @@ while remaining:
     remaining.difference_update(chosen_route["tasks"])
     assert len(remaining) < previous_count, "route loop made no progress"
 
+def evaluate_task_sequence(task_ids, spec):
+    """按正式时变速度、时间窗与政策口径复算任务序列。"""
+    clock, previous = START_TIME, depot_id
+    arrivals, total_route_distance, total_route_late = [], 0.0, 0.0
+    for task_id in task_ids:
+        task = tasks[task_id]
+        customer = task["customer_id"]
+        leg = distance(previous, customer)
+        arrival = clock + travel_minutes(leg, clock)
+        if policy_forbids(spec["kind"], previous, customer, arrival):
+            departure = max(clock, BAN_END)
+            arrival = departure + travel_minutes(leg, departure)
+            if policy_forbids(spec["kind"], previous, customer, arrival):
+                return None
+        service = max(arrival, task["window"][0])
+        late = max(0.0, service - task["window"][1])
+        arrivals.append((task_id, arrival, service, leg))
+        total_route_distance += leg
+        total_route_late += late
+        clock, previous = service + SERVICE_TIME, customer
+    total_route_distance += distance(previous, depot_id)
+    return arrivals, total_route_distance, total_route_late
+
+def improve_routes_with_two_opt(route_list, max_passes=2):
+    """在构造解上执行可复算的路线内 2-opt，接受目标严格改善的邻域。"""
+    started = time.perf_counter()
+    initial_score = final_score = 0.0
+    moves = passes = 0
+    for route in route_list:
+        current = list(route["tasks"])
+        evaluated = evaluate_task_sequence(current, route["spec"])
+        if evaluated is None:
+            continue
+        current_arrivals, current_distance, current_late = evaluated
+        current_score = current_distance + LATE_PENALTY * current_late
+        initial_score += current_score
+        if LOCAL_SEARCH_ENABLED and len(current) >= 3:
+            for _ in range(max_passes):
+                best = None
+                for left in range(len(current) - 1):
+                    for right in range(left + 2, len(current) + 1):
+                        candidate_tasks = current[:left] + list(reversed(current[left:right])) + current[right:]
+                        candidate_eval = evaluate_task_sequence(candidate_tasks, route["spec"])
+                        if candidate_eval is None:
+                            continue
+                        candidate_arrivals, candidate_distance, candidate_late = candidate_eval
+                        candidate_score = candidate_distance + LATE_PENALTY * candidate_late
+                        if candidate_score + 1e-7 < current_score:
+                            item = (candidate_score, candidate_tasks, candidate_arrivals,
+                                    candidate_distance, candidate_late)
+                            if best is None or item[0] < best[0]:
+                                best = item
+                passes += 1
+                if best is None:
+                    break
+                current_score, current, current_arrivals, current_distance, current_late = best
+                moves += 1
+        route["tasks"] = current
+        route["arrivals"] = current_arrivals
+        final_score += current_score
+    runtime_ms = 1000.0 * (time.perf_counter() - started)
+    return {
+        "initial_score": initial_score,
+        "final_score": final_score,
+        "improvement": max(0.0, initial_score - final_score),
+        "improvement_rate": (
+            max(0.0, initial_score - final_score) / initial_score if initial_score else 0.0
+        ),
+        "moves": moves,
+        "passes": passes,
+        "runtime_ms": runtime_ms,
+    }
+
+algorithm_search = improve_routes_with_two_opt(routes)
+
 # 将构造解显式物化为最终模型的决策变量，并逐条审计硬约束。
 x = {}          # x[k,i,j]：车辆 k 是否经过弧 (i,j)
 y = {}          # y[k]：车辆是否启用
@@ -446,7 +524,7 @@ for route in routes:
             energy = per_100 * leg / 100.0 * (1.0 + 0.40 * load_ratio)
             unit_price, carbon_factor = 7.61, 2.547
         else:
-            per_100 = 0.001 * velocity ** 2 - 0.1 * velocity + 36.194
+            per_100 = 0.0014 * velocity ** 2 - 0.12 * velocity + 36.19
             energy = per_100 * leg / 100.0 * (1.0 + 0.35 * load_ratio)
             unit_price, carbon_factor = 1.64, 0.501
         total_energy_cost += unit_price * energy
@@ -463,7 +541,7 @@ for route in routes:
         total_energy_cost += 7.61 * energy
         total_emission += 2.547 * energy
     else:
-        energy = (0.001 * velocity ** 2 - 0.1 * velocity + 36.194) * return_leg / 100.0
+        energy = (0.0014 * velocity ** 2 - 0.12 * velocity + 36.19) * return_leg / 100.0
         total_energy_cost += 1.64 * energy
         total_emission += 0.501 * energy
 
@@ -566,6 +644,145 @@ max_distance_change = float(np.max(np.abs(stress_distance_changes))) if stress_d
 stress_improved = int(sum(value < 0.0 for value in stress_distance_changes))
 mean_late_change = float(np.mean(stress_late_changes)) if stress_late_changes else 0.0
 
+def relocate_failed_route(source_index):
+    """车辆故障时按任务逐个释放，并在其余路线中进行累计容量可行重插。"""
+    working = {
+        index: list(route["tasks"])
+        for index, route in enumerate(routes) if index != source_index
+    }
+    for moved in routes[source_index]["tasks"]:
+        moved_task = tasks[moved]
+        best = None
+        for route_index, target_tasks in working.items():
+            target_route = routes[route_index]
+            if sum(tasks[item]["weight"] for item in target_tasks) + moved_task["weight"] > target_route["spec"]["weight"] + 1e-9:
+                continue
+            if sum(tasks[item]["volume"] for item in target_tasks) + moved_task["volume"] > target_route["spec"]["volume"] + 1e-9:
+                continue
+            for position in range(len(target_tasks) + 1):
+                candidate_tasks = target_tasks[:position] + [moved] + target_tasks[position:]
+                evaluated = evaluate_task_sequence(candidate_tasks, target_route["spec"])
+                if evaluated is None:
+                    continue
+                _, candidate_distance, candidate_late = evaluated
+                candidate = (
+                    candidate_distance + LATE_PENALTY * candidate_late,
+                    route_index, position,
+                )
+                if best is None or candidate < best:
+                    best = candidate
+        if best is None:
+            return False
+        _, route_index, position = best
+        working[route_index].insert(position, moved)
+    return True
+
+# 五类事件均从静态主方案独立构造；新增/地址/时间窗情景只使用附件中的真实任务和节点。
+event_types = ["cancellation", "new_order", "address_change", "time_window", "vehicle_failure"]
+event_trials = {name: 0 for name in event_types}
+event_success = {name: 0 for name in event_types}
+event_scenarios_per_type = min(10, max(1, len(event_candidates)))
+customer_ids = sorted(customer_xy)
+for sample_index in range(event_scenarios_per_type):
+    source_index, moved = event_candidates[
+        (sample_index * max(1, len(event_candidates) // event_scenarios_per_type)) % len(event_candidates)
+    ]
+    source_route = routes[source_index]
+
+    event_trials["cancellation"] += 1
+    cancelled = [item for item in source_route["tasks"] if item != moved]
+    event_success["cancellation"] += int(
+        not cancelled or evaluate_task_sequence(cancelled, source_route["spec"]) is not None
+    )
+
+    event_trials["new_order"] += 1
+    event_success["new_order"] += int(best_dynamic_reinsertion(source_index, moved) is not None)
+
+    # 地址变更采用附件中另一个实际客户节点作为压力位置，避免虚构道路距离。
+    event_trials["address_change"] += 1
+    alternate_customer = customer_ids[(sample_index * 7 + 3) % len(customer_ids)]
+    changed = dict(tasks[moved])
+    changed["customer_id"] = alternate_customer
+    changed["window"] = window_map.get(alternate_customer, changed["window"])
+    tasks.append(changed)
+    event_success["address_change"] += int(
+        best_dynamic_reinsertion(source_index, len(tasks) - 1) is not None
+    )
+    tasks.pop()
+
+    # 时间窗收紧 60 分钟，若原窗不足 60 分钟则收紧到其中点。
+    event_trials["time_window"] += 1
+    changed = dict(tasks[moved])
+    start_window, end_window = changed["window"]
+    changed["window"] = (start_window, max(start_window, end_window - 60.0))
+    tasks.append(changed)
+    event_success["time_window"] += int(
+        best_dynamic_reinsertion(source_index, len(tasks) - 1) is not None
+    )
+    tasks.pop()
+
+    event_trials["vehicle_failure"] += 1
+    event_success["vehicle_failure"] += int(relocate_failed_route(source_index))
+
+event_rates = {
+    name: event_success[name] / max(1, event_trials[name]) for name in event_types
+}
+total_event_trials = sum(event_trials.values())
+total_event_success = sum(event_success.values())
+fallback_rate = 1.0 - total_event_success / max(1, total_event_trials)
+
+# 固定路线在题面正态速度分布下的可复现蒙特卡洛评估；不改变主方案决策。
+def sampled_speed(minute, rng):
+    minute = float(minute) % 1440.0
+    if 480 <= minute < 540 or 690 <= minute < 780:
+        mean, std = 9.8, 4.7
+    elif 540 <= minute < 600 or 780 <= minute < 900:
+        mean, std = 55.3, 0.1
+    else:
+        mean, std = 35.4, 5.2
+    return max(3.0, float(rng.normal(mean, std))) * SPEED_SCALE
+
+def simulate_fixed_routes(rng):
+    on_time = late_total = 0.0
+    for route in routes:
+        clock, previous = START_TIME, depot_id
+        for task_id in route["tasks"]:
+            task = tasks[task_id]
+            leg = distance(previous, task["customer_id"])
+            velocity = sampled_speed(clock, rng)
+            arrival = clock + 60.0 * leg / velocity
+            if policy_forbids(route["kind"], previous, task["customer_id"], arrival):
+                clock = max(clock, BAN_END)
+                velocity = sampled_speed(clock, rng)
+                arrival = clock + 60.0 * leg / velocity
+            service = max(arrival, task["window"][0])
+            late = max(0.0, service - task["window"][1])
+            on_time += int(late <= 1e-9)
+            late_total += late
+            clock, previous = service + SERVICE_TIME, task["customer_id"]
+    rate = on_time / max(1, len(tasks))
+    scenario_cost = total_cost - total_late_cost + LATE_PENALTY * late_total
+    return rate, late_total, scenario_cost
+
+rng = np.random.default_rng(MONTE_CARLO_SEED)
+robust_samples = [simulate_fixed_routes(rng) for _ in range(MONTE_CARLO_SCENARIOS)]
+robust_timewin = np.asarray([item[0] for item in robust_samples], dtype=float)
+robust_late = np.asarray([item[1] for item in robust_samples], dtype=float)
+robust_cost = np.asarray([item[2] for item in robust_samples], dtype=float)
+
+late_values = np.asarray(list(p_late.values()), dtype=float)
+positive_late = late_values[late_values > 1e-9]
+weight_utilization = np.asarray([
+    route["weight"] / route["spec"]["weight"] for route in routes
+], dtype=float)
+volume_utilization = np.asarray([
+    route["volume"] / route["spec"]["volume"] for route in routes
+], dtype=float)
+empty_return_distance = sum(
+    distance(tasks[route["tasks"][-1]]["customer_id"], depot_id) for route in routes
+)
+empty_return_ratio = empty_return_distance / max(1e-9, total_distance)
+
 print(f"RESULT: baseline=ours total_cost={total_cost:.2f} vehicles={vehicles} "
       f"service_rate={service_rate:.4f} total_carbon={total_emission:.2f} "
       f"total_distance={total_distance:.2f} fuel_vehicles={fuel_vehicles} ev_vehicles={ev_vehicles} "
@@ -587,6 +804,31 @@ print(f"DYNAMIC_STRESS: samples={stress_sample_count} success={stress_success} "
       f"p95_response_ms={p95_response_ms:.4f} mean_distance_change={mean_distance_change:.4f} "
       f"max_distance_change={max_distance_change:.4f} improved={stress_improved} "
       f"mean_late_change={mean_late_change:.4f}")
+print(f"ALGORITHM_SEARCH: initial_score={algorithm_search['initial_score']:.4f} "
+      f"final_score={algorithm_search['final_score']:.4f} "
+      f"improvement={algorithm_search['improvement']:.4f} "
+      f"improvement_rate={algorithm_search['improvement_rate']:.6f} "
+      f"moves={algorithm_search['moves']} passes={algorithm_search['passes']} "
+      f"runtime_ms={algorithm_search['runtime_ms']:.4f}")
+print(f"ROBUSTNESS: scenarios={MONTE_CARLO_SCENARIOS} seed={MONTE_CARLO_SEED} "
+      f"timewin_mean={np.mean(robust_timewin):.6f} timewin_std={np.std(robust_timewin):.6f} "
+      f"timewin_p05={np.percentile(robust_timewin, 5):.6f} "
+      f"late_mean={np.mean(robust_late):.4f} late_p95={np.percentile(robust_late, 95):.4f} "
+      f"cost_mean={np.mean(robust_cost):.2f} cost_p95={np.percentile(robust_cost, 95):.2f}")
+print(f"SERVICE_DIAGNOSTICS: late_tasks={len(positive_late)} "
+      f"mean_late_min={np.mean(positive_late) if len(positive_late) else 0.0:.4f} "
+      f"p95_late_min={np.percentile(positive_late, 95) if len(positive_late) else 0.0:.4f} "
+      f"max_late_min={np.max(positive_late) if len(positive_late) else 0.0:.4f} "
+      f"mean_weight_util={np.mean(weight_utilization):.6f} "
+      f"mean_volume_util={np.mean(volume_utilization):.6f} "
+      f"empty_return_ratio={empty_return_ratio:.6f}")
+print(f"DYNAMIC_EVENTS: scenarios={total_event_trials} "
+      f"cancellation_success_rate={event_rates['cancellation']:.6f} "
+      f"new_order_success_rate={event_rates['new_order']:.6f} "
+      f"address_change_success_rate={event_rates['address_change']:.6f} "
+      f"time_window_success_rate={event_rates['time_window']:.6f} "
+      f"vehicle_failure_success_rate={event_rates['vehicle_failure']:.6f} "
+      f"fallback_rate={fallback_rate:.6f}")
 
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
@@ -644,27 +886,29 @@ fig.tight_layout()
 fig.savefig("data_profile.png", dpi=240, bbox_inches="tight")
 plt.close(fig)
 
-# 图 3：只描述程序实际执行的六个阶段，不把未实现的元启发式写入流程图。
-fig, ax = plt.subplots(figsize=(8.2, 6.2), dpi=180)
+# 图 3：只描述程序实际执行的八个阶段，不把未实现的精确算法写入流程图。
+fig, ax = plt.subplots(figsize=(8.2, 7.2), dpi=180)
 ax.axis("off")
-flow_labels = ["附件审计", "聚合与拆分", "分车型构造", "有限车队选择", "硬约束断言", "证据输出"]
-flow_colors = ["#4C78A8", "#72B7B2", "#54A24B", "#F2CF5B", "#E45756", "#B279A2"]
+flow_labels = ["附件审计", "聚合与拆分", "分车型构造", "有限车队选择",
+               "路线内 2-opt", "硬约束断言", "随机与动态实验", "证据输出"]
+flow_colors = ["#4C78A8", "#72B7B2", "#54A24B", "#F2CF5B",
+               "#FF9DA6", "#E45756", "#9D755D", "#B279A2"]
 for index, (label, color) in enumerate(zip(flow_labels, flow_colors)):
     row, column = divmod(index, 2)
     x0 = 0.28 if column == 0 else 0.72
-    y0 = 0.78 - row * 0.30
+    y0 = 0.84 - row * 0.22
     ax.text(x0, y0, f"{index + 1}. {label}", ha="center", va="center", fontsize=14,
             bbox=dict(boxstyle="round,pad=0.75", facecolor=color, alpha=0.86, edgecolor="white"),
             transform=ax.transAxes)
     if index < len(flow_labels) - 1:
         next_row, next_column = divmod(index + 1, 2)
         next_x = 0.28 if next_column == 0 else 0.72
-        next_y = 0.78 - next_row * 0.30
+        next_y = 0.84 - next_row * 0.22
         ax.annotate("", xy=(next_x, next_y + (0.07 if next_row > row else 0.0)),
                     xytext=(x0, y0 - (0.07 if next_row > row else 0.0)),
                     arrowprops=dict(arrowstyle="->", lw=1.8, color="#555555"),
                     xycoords=ax.transAxes)
-ax.set_title("确定性安全求解器执行流程", fontsize=15, pad=10)
+ax.set_title("安全求解器与验证实验执行流程", fontsize=15, pad=10)
 fig.tight_layout()
 fig.savefig("algorithm_flow.png", dpi=240, bbox_inches="tight")
 plt.close(fig)
@@ -691,6 +935,42 @@ for ax in axes:
 fig.suptitle("动态局部重调度压力测试", fontsize=15)
 fig.tight_layout()
 fig.savefig("dynamic_stress.png", dpi=240, bbox_inches="tight")
+plt.close(fig)
+
+# 图 5：随机交通下固定方案的服务率、晚到与成本分布。
+fig, axes = plt.subplots(1, 3, figsize=(12, 3.8), dpi=180)
+axes[0].hist(robust_timewin, bins=14, color="#4C78A8", alpha=0.85)
+axes[0].axvline(np.percentile(robust_timewin, 5), color="#E45756", ls="--", label="P05")
+axes[0].set_title("随机交通时间窗满足率")
+axes[0].legend(frameon=False)
+axes[1].hist(robust_late, bins=14, color="#F58518", alpha=0.85)
+axes[1].axvline(np.percentile(robust_late, 95), color="#E45756", ls="--", label="P95")
+axes[1].set_title("总晚到分钟")
+axes[1].legend(frameon=False)
+axes[2].hist(robust_cost, bins=14, color="#54A24B", alpha=0.85)
+axes[2].axvline(np.percentile(robust_cost, 95), color="#E45756", ls="--", label="P95")
+axes[2].set_title("情景总成本")
+axes[2].legend(frameon=False)
+for ax in axes:
+    ax.grid(alpha=0.18)
+fig.suptitle(f"蒙特卡洛交通稳健性（{MONTE_CARLO_SCENARIOS} 个情景）", fontsize=15)
+fig.tight_layout()
+fig.savefig("robustness_diagnostics.png", dpi=240, bbox_inches="tight")
+plt.close(fig)
+
+# 图 6：路线容量利用与客户晚到诊断。
+fig, axes = plt.subplots(1, 3, figsize=(12, 3.8), dpi=180)
+axes[0].hist(weight_utilization, bins=14, color="#4C78A8", alpha=0.85)
+axes[0].set_title("路线载重利用率")
+axes[1].hist(volume_utilization, bins=14, color="#72B7B2", alpha=0.85)
+axes[1].set_title("路线容积利用率")
+axes[2].hist(positive_late, bins=min(14, max(1, len(positive_late))), color="#E45756", alpha=0.85)
+axes[2].set_title("违约任务晚到分钟")
+for ax in axes:
+    ax.grid(alpha=0.18)
+fig.suptitle("客户服务与线路资源诊断", fontsize=15)
+fig.tight_layout()
+fig.savefig("service_diagnostics.png", dpi=240, bbox_inches="tight")
 plt.close(fig)
 '''
     return source.replace("__DATA_DIR__", repr(str(Path(data_dir).resolve())))
@@ -736,6 +1016,7 @@ def _safe_baseline_draft(item: dict, main_code: str) -> CoderDraft | None:
             'STRATEGY = "first_fit"',
             1,
         )
+        code = code.replace("LOCAL_SEARCH_ENABLED = True", "LOCAL_SEARCH_ENABLED = False", 1)
     else:
         return None
     return CoderDraft(purpose=str(item.get("name") or category), code=code)
@@ -749,7 +1030,7 @@ def _safe_solver_model_contract(state: MathModelingState, artifacts: list[CodeAr
         and "BEACON_GREEN_LOGISTICS_SAFE_SOLVER" in artifact.code
     ), None)
     model = state.latest_model() if state is not None else None
-    if primary is None or model is None or "BEACON_SAFE_SOLVER_CONTRACT_V3" in model.notes:
+    if primary is None or model is None or "BEACON_SAFE_SOLVER_CONTRACT_V4" in model.notes:
         return None
     variables = dict(model.variables)
     variables.update({
@@ -781,9 +1062,10 @@ def _safe_solver_model_contract(state: MathModelingState, artifacts: list[CodeAr
         ],
         "notes": (
             (model.notes + "\n" if model.notes else "")
-            + "BEACON_SAFE_SOLVER_CONTRACT_V3：代码物化 x/y/z/t/u/v_load/w/p_late/"
+            + "BEACON_SAFE_SOLVER_CONTRACT_V4：代码物化 x/y/z/t/u/v_load/w/p_late/"
               "delta/epsilon，逐路线断言题面有限车队容量、流守恒和限行可行性，"
-              "按题面油电耗、价格、排放因子与碳成本统一计分。"
+              "按题面油电耗、价格、排放因子与碳成本统一计分；构造解后执行可行性保持的"
+              "路线内2-opt，并以随机交通、五类事件和服务诊断作外部验证。"
         ),
         "objective_mapping": [
             "最小化固定成本、行驶成本、软时间窗惩罚、能耗与碳成本之和；"
@@ -800,7 +1082,8 @@ def _safe_solver_model_contract(state: MathModelingState, artifacts: list[CodeAr
             "运行时读取四个附件并记录数据血缘",
             "显式断言容量、流守恒、绿色区和任务覆盖",
             "RESULT 输出成本、车辆数、服务率、碳排放、距离、时间窗率与响应时间",
-            "与Q1无政策场景、Q2简单预测和first-fit贪心基线及敏感性中心点交叉校验",
+            "与Q1无政策场景、Q2简单预测和关闭2-opt的first-fit贪心基线及敏感性中心点交叉校验",
+            "执行200个随机交通情景、五类动态事件矩阵和客户/线路级服务诊断",
         ],
         "question_coverage": [],
     })
@@ -823,6 +1106,40 @@ def _code_timeout_seconds() -> int:
         return max(30, int(os.getenv("MATH_AGENT_CODE_TIMEOUT", "120")))
     except ValueError:
         return 120
+
+
+def _green_depth_evidence_error(stdout: str) -> str:
+    """验证城市物流论文所需的算法、随机、诊断与动态实验深度。"""
+    required = (
+        "ALGORITHM_SEARCH", "ROBUSTNESS", "SERVICE_DIAGNOSTICS", "DYNAMIC_EVENTS",
+    )
+    parsed: dict[str, dict[str, float]] = {}
+    for label in required:
+        match = re.search(rf"(?m)^{label}:\s+(.+)$", stdout or "")
+        if match is None:
+            return f"城市物流主证据缺少 {label} 结构化实验行"
+        parsed[label] = {
+            item.group(1): float(item.group(2))
+            for item in re.finditer(
+                r"([A-Za-z_][\w]*)=(-?(?:\d+(?:\.\d+)?|\.\d+))", match.group(1)
+            )
+        }
+    if parsed["ROBUSTNESS"].get("scenarios", 0) < 100:
+        return "ROBUSTNESS 蒙特卡洛情景至少 100 个"
+    if parsed["DYNAMIC_EVENTS"].get("scenarios", 0) < 20:
+        return "DYNAMIC_EVENTS 五类事件实验至少 20 个独立情景"
+    rate_keys = (
+        "cancellation_success_rate", "new_order_success_rate",
+        "address_change_success_rate", "time_window_success_rate",
+        "vehicle_failure_success_rate", "fallback_rate",
+    )
+    for key in rate_keys:
+        value = parsed["DYNAMIC_EVENTS"].get(key)
+        if value is None or not 0.0 <= value <= 1.0:
+            return f"DYNAMIC_EVENTS 字段 {key} 缺失或超出 [0,1]"
+    if parsed["ALGORITHM_SEARCH"].get("improvement", -1) < 0:
+        return "ALGORITHM_SEARCH improvement 不得为负"
+    return ""
 
 
 def _validated_execution(
@@ -875,6 +1192,9 @@ def _validated_execution(
             return False, "燃油车或新能源车启用数超过题面分类上限", "output_validation"
         if abs(metrics["fuel_vehicles"] + metrics["ev_vehicles"] - metrics["vehicles"]) > 1e-9:
             return False, "燃油车与新能源车数量之和不等于总车辆数", "output_validation"
+        depth_error = _green_depth_evidence_error(result.stdout)
+        if depth_error:
+            return False, depth_error, "output_validation"
     if require_data_usage:
         lineage_ok, lineage_reason = validate_code_data_usage(
             code, [info.filename for info in state.data_files],
