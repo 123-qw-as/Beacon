@@ -23,7 +23,7 @@
 </p>
 
 > 当前实现、已知限制与真题验收结论请先看 [`docs/README.md`](docs/README.md)。
-> 其中解释了旧 PDF 为什么只有 8 页，以及最新 completed 真题运行、9 页 PDF 和故障恢复证据。
+> 其中区分了完整 CLI 基准运行与内容增强参考重建，并解释旧 PDF 为什么只有 8 页、当前如何稳定生成 20 页以上正文。
 
 ---
 
@@ -274,6 +274,10 @@ MATH_AGENT_LLM_ATTEMPT_TIMEOUT=120
 MATH_AGENT_LLM_TOTAL_TIMEOUT=300
 MATH_AGENT_LLM_LONG_ATTEMPT_TIMEOUT=240
 MATH_AGENT_LLM_LONG_TOTAL_TIMEOUT=420
+
+# --- Paper depth gates ---
+MATH_AGENT_MIN_PAPER_BODY_PAGES=20
+MATH_AGENT_MIN_PAPER_BODY_CHARS=15000
 
 # --- RAG (optional) ---
 MATH_AGENT_RAG_ENABLED=1
