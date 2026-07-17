@@ -52,23 +52,41 @@ def _setup_all_mocks(mocker, workdir):
 
     # coder 仅输出 print（生成 png 由 sensitivity step 完成）
     mocker.patch("math_agent.nodes.coder.complete",
-                 return_value=CoderDraft(purpose="主结果", code="print('coder done')"))
+                 return_value=CoderDraft(
+                     purpose="主结果",
+                     code=(
+                         "for name, cost in [('ours', 100), ('no_schedule', 110), "
+                         "('simple_pred', 105), ('greedy', 120)]:\n"
+                         " print(f'RESULT: baseline={name} total_cost={cost} vehicles=1 '"
+                         "'service_rate=1 total_carbon=1')"
+                     ),
+                 ))
 
     # model_code_consistency 审查通过
     mocker.patch("math_agent.nodes.model_code_consistency.complete",
                  return_value=ModelCodeConsistencyReport(score=9, approved=True))
 
     # sensitivity 三段
-    sens_plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [1,2,3,4,5], "metric": "y", "rationale": "r"}])
+    sens_plan = SensitivityPlan(runs=[{"parameter": "speed_multiplier", "values": [0.8,1.0,1.2], "metric": "total_cost", "rationale": "r"}])
     sens_code = SensitivityCode(code=(
         "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-        "v=[1,2,3,4,5]; r=[x*2 for x in v]\n"
-        "plt.plot(v,r); plt.savefig('lambda.png')\n"
-        "print(f'RESULT: parameter=lambda values={v} results={r}')\n"
+        "v=[0.8,1.0,1.2]; r=[100,100,100]\n"
+        "plt.plot(v,r); plt.savefig('speed_multiplier.png')\n"
+        "print(f'RESULT: parameter=speed_multiplier values={v} results={r}')\n"
     ))
-    sens_interp = Interpretations(interpretations=["lambda 越大 y 线性增长，敏感度中等。"])
+    sens_interp = Interpretations(interpretations=["速度扰动下总成本保持稳定。"])
+
+    def _sensitivity_complete(prompt, *, schema, **kw):
+        if schema is SensitivityPlan:
+            return sens_plan
+        if schema is SensitivityCode:
+            return sens_code
+        if schema is Interpretations:
+            return sens_interp
+        raise AssertionError(f"unexpected sensitivity schema: {schema}")
+
     mocker.patch("math_agent.nodes.sensitivity.complete",
-                 side_effect=[sens_plan, sens_code, sens_interp])
+                 side_effect=_sensitivity_complete)
 
     # figure pipeline：sensitivity 图 = 1 张
     fc = FigureCriticOut(score=9, approved=True)
@@ -86,13 +104,14 @@ def _setup_all_mocks(mocker, workdir):
     _section_payloads = {
         WriterOutline: WriterOutline(),
         _AbstractProblemOut: _AbstractProblemOut(
-            abstract="a"*200, problem_restatement="x"*200, keywords="k"),
-        _AssumptionsNotationOut: _AssumptionsNotationOut(assumptions="x"*200, notation="x"*200),
-        _ModelOut: _ModelOut(model_section="x"*200),
-        _SolutionOut: _SolutionOut(solution="x"*200),
-        _SensitivityOut: _SensitivityOut(sensitivity="x"*200),
-        _ConclusionOut: _ConclusionOut(conclusion="x"*200),
-        _ReferencesOut: _ReferencesOut(references="-"),
+            abstract="a"*300, problem_restatement="x"*1600, keywords="建模、优化"),
+        _AssumptionsNotationOut: _AssumptionsNotationOut(
+            assumptions="x"*1600, notation="x"*600),
+        _ModelOut: _ModelOut(model_section="x"*4500),
+        _SolutionOut: _SolutionOut(solution="x"*2800),
+        _SensitivityOut: _SensitivityOut(sensitivity="x"*1800),
+        _ConclusionOut: _ConclusionOut(conclusion="x"*1600),
+        _ReferencesOut: _ReferencesOut(references="参考文献"*40),
     }
     def _writer_complete(prompt, *, schema, **kw):
         return _section_payloads.get(schema, _section_payloads[WriterOutline])
@@ -135,6 +154,8 @@ def test_full_pipeline_with_hitl_interrupt_and_resume(mocker, workdir):
 
     assert (workdir / "paper.tex").exists()
     assert (workdir / "paper.md").exists()
+    assert (workdir / "completion.json").exists()
+    assert (workdir / "final_state.json").exists()
 
 
 def test_full_pipeline_rejection_stops_before_latex(mocker, workdir):

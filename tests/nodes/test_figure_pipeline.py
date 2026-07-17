@@ -110,6 +110,24 @@ def test_collect_pngs_ignores_old_coder_batches():
     assert [path for path, _, _ in _collect_pngs(state)] == ["new.png"]
 
 
+def test_collect_pngs_rejects_supporting_figure_with_stale_primary_metrics():
+    from math_agent.nodes.figure_pipeline import _collect_pngs
+    state = MathModelingState(problem="p", code_artifacts=[
+        CodeArtifact(
+            purpose="stale", code="", success=True, batch=3,
+            evidence_role="supporting", artifact_paths=["stale.png"],
+            stdout="RESULT: baseline=ours total_cost=19384810 total_carbon=17761078 vehicles=604",
+        ),
+        CodeArtifact(
+            purpose="main", code="", success=True, batch=3,
+            evidence_role="primary", artifact_paths=["main.png"],
+            stdout="RESULT: baseline=ours total_cost=300524.02 total_carbon=126799.63 vehicles=604",
+        ),
+    ])
+
+    assert [path for path, _, _ in _collect_pngs(state)] == ["main.png"]
+
+
 def test_pipeline_uses_figure_model_for_critic_and_analyst(mocker, workdir):
     """critic 用 figure_critic 模型，analyst 用 figure_analyst 模型，二者均来自 FIGURE_MODEL。"""
     from math_agent.config import MODEL_ROUTING

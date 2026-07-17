@@ -142,6 +142,21 @@ def test_sensitivity_table_empty():
     assert table == ""
 
 
+def test_sensitivity_table_uses_latest_run_per_parameter():
+    runs = [
+        SensitivityRun(parameter="speed", values=[0.8, 1.0, 1.2],
+                       metric="cost", results=[240000, 245000, 250000]),
+        SensitivityRun(parameter="speed", values=[0.8, 1.0, 1.2],
+                       metric="cost", results=[146017.04, 144586.99, 145204.85]),
+    ]
+
+    table = _generate_sensitivity_table(runs)
+
+    assert table.count("| speed |") == 1
+    assert "1.446e+05" in table
+    assert "2.4e+05" not in table
+
+
 from math_agent.nodes.table_assembler import _inject_table
 
 
@@ -154,13 +169,24 @@ def test_inject_table_appends_when_absent():
     assert "| A | B |" in result
 
 
-def test_inject_table_skips_when_already_present():
+def test_inject_table_can_skip_when_already_present():
     text = "原有内容。\n\n## 参数表\n\n已有表格"
     table = "| A | B |\n|---|---|\n| 1 | 2 |"
-    result = _inject_table(text, "参数表", table)
+    result = _inject_table(text, "参数表", table, replace_existing=False)
     # 不重复注入
     assert result.count("## 参数表") == 1
     assert "| A | B |" not in result
+
+
+def test_inject_table_refreshes_existing_generated_table():
+    text = "正文。\n\n## 参数表\n\n| A | B |\n|---|---|\n| old | old |\n"
+    table = "| A | B |\n|---|---|\n| current | current |"
+
+    result = _inject_table(text, "参数表", table)
+
+    assert "old" not in result
+    assert result.count("## 参数表") == 1
+    assert "current" in result
 
 
 def test_inject_table_empty_table_returns_unchanged():
@@ -284,7 +310,7 @@ def test_comparison_table_empty_when_no_baselines():
     assert table == ""
 
 
-def test_comparison_table_handles_failed_baselines():
+def test_comparison_table_omits_failed_baselines():
     artifacts = [
         CodeArtifact(
             purpose="无调度对照", code="", success=False,
@@ -297,7 +323,27 @@ def test_comparison_table_handles_failed_baselines():
         ),
     ]
     table = _generate_comparison_table(artifacts)
-    assert "运行失败" in table
+    assert "无调度" not in table
+    assert "运行失败" not in table
+    assert "980.0" in table
+
+
+def test_comparison_table_omits_semantically_invalid_success():
+    artifacts = [
+        CodeArtifact(
+            purpose="异常主方案", code="", success=True,
+            stdout="RESULT: baseline=ours total_cost=4812127.99 veh_count=19011 service_rate=0.92",
+        ),
+        CodeArtifact(
+            purpose="有效基线", code="", success=True,
+            stdout="RESULT: baseline=greedy total_cost=980.0 vehicles=7 service_rate=0.91",
+            category="baseline:greedy",
+        ),
+    ]
+
+    table = _generate_comparison_table(artifacts, max_entity_count=2170)
+
+    assert "4812127.99" not in table
     assert "980.0" in table
 
 

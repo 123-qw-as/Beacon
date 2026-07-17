@@ -1,5 +1,7 @@
 # Writer LaTeX 兼容 — Implementation Plan
 
+> **历史方案记录（非现行事实源）**：路径、状态、命令和待办保留当时上下文；当前实现与限制见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让 writer 产出的 `paper.md` 在被 latex_node 渲成 `paper.tex` 后，**真正能用 xelatex 编出 PDF**——目前 writer 输出大量裸 unicode 数学符号（`α_i`、`σ_d`）和裸 LaTeX 下标（`s_i^0`、`\hat{d}_i`），text mode 下 `_` 不合法、`α` 不在默认 roman font 里。

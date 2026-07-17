@@ -51,7 +51,10 @@ def test_coder_node_produces_baseline_artifacts(monkeypatch):
     def mock_complete(prompt, *, schema=None, **kw):
         call_count["n"] += 1
         if call_count["n"] <= 1:
-            return CoderDraft(purpose="main plot", code="print('main')")
+            return CoderDraft(
+                purpose="main plot",
+                code="print('RESULT: baseline=ours total_cost=80.0 service_rate=0.95')",
+            )
         specs = ["no_schedule", "simple_pred", "greedy"]
         idx = call_count["n"] - 2
         return CoderDraft(
@@ -84,6 +87,27 @@ def test_main_figure_prompt_includes_ours_result_contract():
     m = ModelVersion(stage="final", description="test", variables={"x": "v"})
     prompt = build_prompt_figure_one(m, "plot1")
     assert "RESULT: baseline=ours" in prompt
+    assert "O(n^2)" in prompt
+    assert "内存不超过 1 GB" in prompt
+    assert "拆成容量可行的多次访问" in prompt
+    assert "while unserved" in prompt
+    assert "read_only" in prompt
+
+
+def test_supporting_figure_prompt_reuses_canonical_evidence():
+    from math_agent.prompts.coder_figure_one import build_prompt_figure_one
+    from math_agent.state import ModelVersion
+
+    model = ModelVersion(stage="final", description="test")
+    prompt = build_prompt_figure_one(
+        model,
+        "补充图",
+        canonical_evidence="RESULT: baseline=ours total_cost=100 service_rate=0.95",
+    )
+
+    assert "唯一主方案证据" in prompt
+    assert "禁止重新运行路径优化" in prompt
+    assert "total_cost=100" in prompt
 
 
 def test_coder_prompt_includes_data_file_paths():

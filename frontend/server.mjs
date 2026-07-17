@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile, open } from "node:fs/promises";
 import { watch } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -19,6 +19,52 @@ const port = Number.isInteger(requestedPort) && requestedPort >= 1 && requestedP
   ? requestedPort
   : 5173;
 const runs = new Map();
+
+/**
+ * 这些 .env 配置项的「真相来源」是 .env 文件本身，不是本进程启动时缓存的环境变量。
+ * 本服务（server.mjs）用 `import "dotenv/config"` 在启动时把 .env 加载进 process.env，
+ * 之后用户通过 UI 改配置 -> config.mjs 写回 .env，但本进程的 process.env 仍是旧值。
+ * 如果把这些旧值注入子进程，子进程的 load_dotenv(override=False) 不会用 .env 新值覆盖，
+ * 导致「改了配置不生效」（如 model=ocg/... 仍报 Provider NOT provided）。
+ *
+ * 因此 spawn 子进程时剔除这些缓存的配置项，让子进程自己从 .env 读取最新值。
+ * 运行级覆盖（RAG 开关、迭代上限）由调用方显式传入，不在此剔除列表中。
+ */
+const ENV_VARS_OWNED_BY_DOTENV = new Set([
+  "OPENAI_API_BASE", "OPENAI_API_KEY",
+  "MATH_AGENT_DEFAULT_MODEL", "MATH_AGENT_STRONG_MODEL", "MATH_AGENT_FIGURE_MODEL",
+  "MATH_AGENT_CODER_MODEL",
+  "MATH_AGENT_LLM_TIMEOUT", "MATH_AGENT_LLM_ATTEMPT_TIMEOUT",
+  "MATH_AGENT_LLM_TOTAL_TIMEOUT", "MATH_AGENT_LLM_LONG_ATTEMPT_TIMEOUT",
+  "MATH_AGENT_LLM_LONG_TOTAL_TIMEOUT", "MATH_AGENT_LLM_VISION_ATTEMPT_TIMEOUT",
+  "MATH_AGENT_LLM_CODE_ATTEMPT_TIMEOUT", "MATH_AGENT_LLM_CODE_TOTAL_TIMEOUT",
+  "MATH_AGENT_LLM_VISION_TOTAL_TIMEOUT", "MATH_AGENT_LLM_FALLBACK_MODELS",
+  "MATH_AGENT_LLM_FALLBACK_RESERVE", "MATH_AGENT_LLM_LONG_FALLBACK_RESERVE",
+  "MATH_AGENT_LLM_CODE_FALLBACK_RESERVE",
+  "MATH_AGENT_LLM_VISION_FALLBACK_RESERVE", "MATH_AGENT_LLM_MODEL_COOLDOWN",
+  "MATH_AGENT_LLM_MODEL_MAX_COOLDOWN",
+  "MATH_AGENT_EMBED_TIMEOUT",
+  "MATH_AGENT_RAG_EMBED", "MATH_AGENT_RAG_DIM", "MATH_AGENT_RAG_DB", "MATH_AGENT_RAG_TOPK",
+  "MATH_AGENT_COMMAND", "PORT",
+]);
+
+/**
+ * 构建子进程环境：剔除本进程缓存的 .env 配置项（让子进程从 .env 自读），
+ * 保留系统环境（PATH 等）及调用方传入的运行级覆盖。
+ */
+function buildChildEnv(overrides = {}) {
+  const childEnv = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (!ENV_VARS_OWNED_BY_DOTENV.has(k)) childEnv[k] = v;
+  }
+  return {
+    ...childEnv,
+    ...overrides,
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+    UV_CACHE_DIR: env.UV_CACHE_DIR || resolve(projectRoot, ".uv-cache"),
+  };
+}
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const MAX_UPLOAD_BODY = 200 * 1024 * 1024; // 200MB
@@ -52,7 +98,12 @@ function parseMultipart(buffer, boundary) {
 }
 
 async function generateFileMeta(filePath) {
-  const python = env.PYTHON || "python";
+  const venvPython = resolve(
+    projectRoot,
+    ".venv",
+    globalThis.process?.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
+  const python = env.PYTHON || (existsSync(venvPython) ? venvPython : "python");
   const py = spawn(python, ["scripts/extract_file_meta.py", filePath], {
     cwd: projectRoot,
     windowsHide: true,
@@ -182,7 +233,7 @@ function _notifySseClients(run) {
 async function _spawnResume(run, approve, notes) {
   const commandParts = splitCommandLine(env.MATH_AGENT_COMMAND || "uv run math-agent");
   const command = commandParts[0];
-  const args = [...commandParts.slice(1), "resume",
+  const args = [...commandParts.slice(1), "supervise-resume",
     "--out", run.out, "--thread", run.threadId];
   if (approve) { args.push("--approve"); } else { args.push("--no-approve"); }
   if (notes) { args.push("--notes", notes); }
@@ -201,12 +252,10 @@ async function _spawnResume(run, approve, notes) {
 
   const child = spawn(command, args, {
     cwd: projectRoot,
-    env: {
-      ...env,
+    env: buildChildEnv({
       MATH_AGENT_RAG_ENABLED: run.ragEnabled === false ? "0" : "1",
       MATH_AGENT_MAX_MODEL_ITERATIONS: String(run.iterationDepth || 3),
-      UV_CACHE_DIR: env.UV_CACHE_DIR || resolve(projectRoot, ".uv-cache"),
-    },
+    }),
     windowsHide: true,
   });
 
@@ -215,6 +264,9 @@ async function _spawnResume(run, approve, notes) {
   run.logPath = logPath;
   let childSettled = false;
   child.stdout.on("data", (chunk) => {
+    run.stdoutBuffer = (run.stdoutBuffer + chunk.toString()).slice(-8192);
+  });
+  child.stderr.on("data", (chunk) => {
     run.stdoutBuffer = (run.stdoutBuffer + chunk.toString()).slice(-8192);
   });
   child.stdout.pipe(logStream);
@@ -237,6 +289,8 @@ async function _spawnResume(run, approve, notes) {
       run.status = "rejected";
     } else if (code === 0 && run.stdoutBuffer.includes("pipeline paused before human_review")) {
       run.status = "paused";
+    } else if (run.stdoutBuffer.includes("[DEGRADED]")) {
+      run.status = "degraded";
     } else {
       run.status = code === 0 ? "completed" : "failed";
     }
@@ -541,7 +595,7 @@ async function handleApi(request, response, url) {
     const commandParts = splitCommandLine(env.MATH_AGENT_COMMAND || "uv run math-agent");
     const command = commandParts[0];
     const problemArg = body.fixturePath ? safeProjectPath(body.fixturePath) : problemPath;
-    const args = [...commandParts.slice(1), "run", "--problem", problemArg, "--out", out, "--thread", body.threadId || "default"];
+    const args = [...commandParts.slice(1), "supervise", "--problem", problemArg, "--out", out, "--thread", body.threadId || "default"];
     if (body.noInterrupt) args.push("--no-interrupt");
     if (body.template && body.template !== "default") args.push("--template", body.template);
     if (body.force) args.push("--force");
@@ -569,12 +623,10 @@ async function handleApi(request, response, url) {
 
     const child = spawn(command, args, {
       cwd: projectRoot,
-      env: {
-        ...env,
+      env: buildChildEnv({
         MATH_AGENT_RAG_ENABLED: body.ragEnabled === false ? "0" : "1",
         MATH_AGENT_MAX_MODEL_ITERATIONS: String(iterationDepth),
-        UV_CACHE_DIR: env.UV_CACHE_DIR || resolve(projectRoot, ".uv-cache"),
-      },
+      }),
       windowsHide: true,
     });
 
@@ -583,6 +635,9 @@ async function handleApi(request, response, url) {
     let childSettled = false;
     // tap stdout to detect HITL pause marker (CLI exits 0 for both pause and complete)
     child.stdout.on("data", (chunk) => {
+      run.stdoutBuffer = (run.stdoutBuffer + chunk.toString()).slice(-8192);
+    });
+    child.stderr.on("data", (chunk) => {
       run.stdoutBuffer = (run.stdoutBuffer + chunk.toString()).slice(-8192);
     });
     child.stdout.pipe(logStream);
@@ -602,6 +657,8 @@ async function handleApi(request, response, url) {
       if (run.status !== "stopped") {
         if (code === 0 && run.stdoutBuffer.includes("pipeline paused before human_review")) {
           run.status = "paused";
+        } else if (run.stdoutBuffer.includes("[DEGRADED]")) {
+          run.status = "degraded";
         } else {
           run.status = code === 0 ? "completed" : "failed";
         }
@@ -687,7 +744,3 @@ createServer(async (request, response) => {
   console.log("  ╚══════════════════════════════════════════════╝");
   console.log("");
 });
-
-
-
-

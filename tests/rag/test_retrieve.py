@@ -1,3 +1,4 @@
+from math_agent.errors import LLMConnectionError
 from math_agent.rag.retrieve import search, format_snippets, Snippet
 
 
@@ -148,3 +149,18 @@ def test_search_checks_store_dimension_before_embedding(mocker, workdir):
     with pytest.raises(ValueError, match="dim"):
         search("q", db_path=workdir / "vec.db", k=1, dim=4, embedding_model="m")
     embed.assert_not_called()
+
+
+def test_search_returns_empty_when_embedding_backend_unavailable(mocker, workdir):
+    from math_agent.rag.store import VectorStore
+
+    store = VectorStore.open(workdir / "vec.db", dim=3)
+    store.close()
+
+    mocker.patch(
+        "math_agent.rag.retrieve.embed_texts",
+        side_effect=LLMConnectionError("router down"),
+    )
+
+    out = search("q", db_path=workdir / "vec.db", k=1, dim=3, embedding_model="m")
+    assert out == []

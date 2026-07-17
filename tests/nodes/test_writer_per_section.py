@@ -60,7 +60,7 @@ def _make_complete_side_effect():
             )
         # 分组 schema：按字段名填标记值
         fields = schema.model_fields
-        return schema(**{f: f"VAL_{f}" for f in fields})
+        return schema(**{f: f"VAL_{f}" + "甲" * 7000 for f in fields})
 
     return _side, calls
 
@@ -84,7 +84,7 @@ def _run_writer_full(s):
 # ---------------------------------------------------------------------------
 
 def test_writer_makes_outline_then_per_section_calls(mocker):
-    """首轮：1 次大纲（prep）+ 7 次分章（section 循环）= 8 次 complete 调用。"""
+    """首轮：大纲之后，七个分组都按本题证据调用 writer。"""
     side, calls = _make_complete_side_effect()
     mocker.patch("math_agent.nodes.writer.complete", side_effect=side)
     s = _rich_state()
@@ -94,22 +94,21 @@ def test_writer_makes_outline_then_per_section_calls(mocker):
     assert len(calls) == 8
     # 第一次是大纲
     assert calls[0] is WriterOutline
-    # 后 7 次是分组 schema（顺序与 writer_sections 一致）
     expected_schemas = [schema_for_group(g.name) for g in writer_sections()]
     assert calls[1:] == expected_schemas
     # 最终 paper 字段被填充
     assert isinstance(paper, PaperSections)
-    assert paper.abstract == "VAL_abstract"
-    assert paper.keywords == "VAL_keywords"
-    assert paper.model_section == "VAL_model_section"
+    assert paper.abstract.startswith("VAL_abstract")
+    assert paper.keywords.startswith("VAL_keywords")
+    assert paper.model_section.startswith("VAL_model_section")
+    assert paper.sensitivity.startswith("VAL_sensitivity")
 
 
 def test_writer_first_iter_runs_all_seven_sections(mocker):
-    """首轮无 critic 时跑全部 7 分组（+ 1 大纲 = 8 次）。"""
+    """首轮跑全部分组；通用题不复用其他题目的固定事实稿。"""
     side, calls = _make_complete_side_effect()
     mocker.patch("math_agent.nodes.writer.complete", side_effect=side)
     _run_writer_full(_rich_state())
-    # 8 = 1 outline + 7 sections
     assert len(calls) == 8
 
 
@@ -143,7 +142,7 @@ def test_writer_second_iter_only_rewrites_flagged_sections(mocker):
     assert len(calls) == 1
     assert calls[0] is schema_for_group("solution")
     # solution 被更新
-    assert paper.solution == "VAL_solution"
+    assert paper.solution.startswith("VAL_solution")
     # 其余字段保留旧值
     assert paper.abstract == "OLD_ABSTRACT"
     assert paper.model_section == "OLD_M"
@@ -178,9 +177,9 @@ def test_writer_second_iter_multiple_flagged_groups(mocker):
     assert calls[0] is schema_for_group("abstract_problem")
     assert calls[1] is schema_for_group("assumptions_notation")
     # 被更新
-    assert paper.abstract == "VAL_abstract"
-    assert paper.keywords == "VAL_keywords"
-    assert paper.notation == "VAL_notation"
+    assert paper.abstract.startswith("VAL_abstract")
+    assert paper.keywords.startswith("VAL_keywords")
+    assert paper.notation.startswith("VAL_notation")
     # 未触及的保留
     assert paper.solution == "OS"
     assert paper.model_section == "OM"
@@ -201,7 +200,7 @@ def test_writer_general_issue_rewrites_all_sections(mocker):
 
     _run_writer_full(s)
 
-    # 无大纲 + 7 分组
+    # 无大纲；全部分组都按当前题目证据重写
     assert len(calls) == 7
     expected_schemas = [schema_for_group(g.name) for g in writer_sections()]
     assert calls == expected_schemas
@@ -312,11 +311,33 @@ def test_section_prompt_contains_iron_rules(mocker):
     mocker.patch("math_agent.nodes.writer.complete", side_effect=capture)
     _run_writer_full(_rich_state())
 
-    # 1 大纲 + 7 分章，每个都 include writer_iron_rules.md.j2
+    # 1 次大纲 + 7 个分组
     assert len(prompts) == 8
     for p in prompts:
         assert "IRON RULES" in p
         assert "禁编造数据" in p
+
+
+def test_writer_retries_once_when_section_is_below_content_budget(mocker):
+    state = _rich_state()
+    state.writer_iteration = 1
+    state.writer_outline_dump = WriterOutline(solution="求解锚点").model_dump()
+    state.writer_section_queue = ["solution"]
+    calls = []
+
+    def complete_side_effect(prompt, *, schema=None, **kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return schema(solution="过短")
+        return schema(solution="VAL_solution" + "甲" * 3200)
+
+    mocker.patch("math_agent.nodes.writer.complete", side_effect=complete_side_effect)
+
+    delta = writer_section_node(state)
+
+    assert len(calls) == 2
+    assert "篇幅质量门禁" in calls[1]
+    assert delta["paper"].solution.startswith("VAL_solution")
 
 
 def test_writer_retry_reuses_first_outline(mocker):
@@ -367,3 +388,57 @@ def test_available_numbers_ignores_old_coder_batches():
     numbers = _extract_available_numbers(state)
     assert "999" not in numbers
     assert "100" in numbers
+
+
+def test_writer_evidence_rejects_exit_zero_errors_and_impossible_counts():
+    from math_agent.prompts.writer_section import _compact_code_artifacts, _extract_available_numbers
+    from math_agent.state import CodeArtifact, DataFileInfo
+
+    state = _rich_state()
+    state.data_files = [DataFileInfo(
+        filename="订单.xlsx", file_type="xlsx", path="订单.xlsx",
+        summary={"rows": 2170},
+    )]
+    state.code_artifacts = [
+        CodeArtifact(
+            purpose="吞异常", code="", success=True,
+            stdout="Error during execution: '纬度'\nRESULT: baseline=ours total_cost=0 service_rate=0",
+        ),
+        CodeArtifact(
+            purpose="越界", code="", success=True,
+            stdout="RESULT: baseline=ours total_cost=4812127.99 veh_count=19011 service_rate=0.92",
+        ),
+        CodeArtifact(
+            purpose="有效", code="", success=True,
+            stdout="RESULT: baseline=ours total_cost=2470.93 vehicles=7 service_rate=1.0",
+        ),
+    ]
+
+    numbers = _extract_available_numbers(state)
+    compact = _compact_code_artifacts(state)
+
+    assert "4812127.99" not in numbers
+    assert "2470.93" in numbers
+    assert [item.purpose for item in compact] == ["有效"]
+
+
+def test_writer_ignores_supporting_figure_metrics():
+    from math_agent.prompts.writer_section import _extract_available_numbers
+    from math_agent.state import CodeArtifact
+
+    state = _rich_state()
+    state.code_artifacts = [
+        CodeArtifact(
+            purpose="主求解", code="", success=True, evidence_role="primary",
+            stdout="RESULT: baseline=ours total_cost=100 service_rate=0.95",
+        ),
+        CodeArtifact(
+            purpose="补充图", code="", success=True, evidence_role="supporting",
+            stdout="RESULT: baseline=ours total_cost=999 service_rate=0.80",
+        ),
+    ]
+
+    numbers = _extract_available_numbers(state)
+
+    assert "total_cost=100" in numbers
+    assert "total_cost=999" not in numbers

@@ -24,6 +24,20 @@ def _compute_overall(r: EvaluationReport) -> float:
     return round(total, 2)
 
 
+def _unwrap_scores(raw: EvaluationReport) -> EvaluationReport:
+    """如果 LLM 返回嵌套 scores 而非顶层字段，解包并重新赋值。"""
+    scores_raw = getattr(raw, "_scores", None) or getattr(raw, "scores", None)
+    if scores_raw is None:
+        return raw
+    # 尝试从嵌套 scores dict 里提取各维度分
+    for dim in _WEIGHTS:
+        if getattr(raw, dim, None) is None:
+            val = scores_raw.get(dim)
+            if val is not None:
+                setattr(raw, dim, val)
+    return raw
+
+
 def evaluation_node(state: MathModelingState) -> dict:
     p = state.paper
     if not any([p.abstract, p.model_section, p.solution]):
@@ -35,5 +49,6 @@ def evaluation_node(state: MathModelingState) -> dict:
         schema=EvaluationReport, system=SYSTEM,
         model=MODEL_ROUTING["evaluation"],
     )
+    out = _unwrap_scores(out)
     out.overall = _compute_overall(out)  # 确定性自校正
     return {"evaluation": out}

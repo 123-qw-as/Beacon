@@ -58,23 +58,41 @@ def _full_mocks(mocker, workdir, *, stages=("basic", "improved", "final"), criti
                      return_value=CriticReport(target="modeler", score=9, approved=True))
 
     mocker.patch("math_agent.nodes.coder.complete",
-                 return_value=CoderDraft(purpose="ok", code="print('done')"))
+                 return_value=CoderDraft(
+                     purpose="ok",
+                     code=(
+                         "for name, cost in [('ours', 100), ('no_schedule', 110), "
+                         "('simple_pred', 105), ('greedy', 120)]:\n"
+                         " print(f'RESULT: baseline={name} total_cost={cost} vehicles=1 '"
+                         "'service_rate=1 total_carbon=1')"
+                     ),
+                 ))
 
     # model_code_consistency 审查通过
     mocker.patch("math_agent.nodes.model_code_consistency.complete",
                  return_value=ModelCodeConsistencyReport(score=9, approved=True))
 
-    sens_plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [1, 2, 3, 4, 5],
-                                       "metric": "y", "rationale": "r"}])
+    sens_plan = SensitivityPlan(runs=[{"parameter": "speed_multiplier", "values": [0.8, 1.0, 1.2],
+                                       "metric": "total_cost", "rationale": "r"}])
     sens_code = SensitivityCode(code=(
         "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-        "v=[1,2,3,4,5]; r=[x*2 for x in v]\n"
-        "plt.plot(v,r); plt.savefig('lambda.png')\n"
-        "print(f'RESULT: parameter=lambda values={v} results={r}')\n"
+        "v=[0.8,1.0,1.2]; r=[100,100,100]\n"
+        "plt.plot(v,r); plt.savefig('speed_multiplier.png')\n"
+        "print(f'RESULT: parameter=speed_multiplier values={v} results={r}')\n"
     ))
+    sens_interp = Interpretations(interpretations=["速度扰动下总成本保持稳定。"])
+
+    def _sensitivity_complete(prompt, *, schema, **kw):
+        if schema is SensitivityPlan:
+            return sens_plan
+        if schema is SensitivityCode:
+            return sens_code
+        if schema is Interpretations:
+            return sens_interp
+        raise AssertionError(f"unexpected sensitivity schema: {schema}")
+
     mocker.patch("math_agent.nodes.sensitivity.complete",
-                 side_effect=[sens_plan, sens_code,
-                              Interpretations(interpretations=["lambda 越大 y 线性增长。"])])
+                 side_effect=_sensitivity_complete)
 
     mocker.patch("math_agent.nodes.figure_pipeline.complete",
                  side_effect=[FigureCriticOut(score=9, approved=True),
@@ -82,9 +100,11 @@ def _full_mocks(mocker, workdir, *, stages=("basic", "improved", "final"), criti
 
     mocker.patch("math_agent.nodes.writer.complete",
                  return_value=PaperSections(
-                     abstract="x"*200, problem_restatement="x"*200, assumptions="x"*200,
-                     notation="x"*200, model_section="x"*200, solution="x"*200,
-                     sensitivity="x"*200, conclusion="x"*200, references="-",
+                     abstract="x"*300, problem_restatement="x"*1600,
+                     keywords="建模、优化", assumptions="x"*1600,
+                     notation="x"*600, model_section="x"*4500,
+                     solution="x"*2800, sensitivity="x"*1800,
+                     conclusion="x"*1600, references="参考文献"*40,
                  ))
     mocker.patch("math_agent.nodes.paper_critic.complete",
                  return_value=CriticReport(target="paper", score=9, approved=True))
@@ -173,23 +193,21 @@ def test_writer_paper_critic_loop_isolated(mocker):
     _round = {"i": 0}  # 0=v1, 1=v2
 
     def _section_out(schema, mk):
-        common = dict(problem_restatement="x"*150, assumptions="x"*150, notation="x"*150,
-                      model_section="x"*400, solution="x"*200, sensitivity="x"*150,
-                      conclusion="x"*150, references="-", keywords="")
         if schema is _AbstractProblemOut:
-            return _AbstractProblemOut(abstract=mk*100, problem_restatement="x"*150, keywords="")
+            return _AbstractProblemOut(
+                abstract=mk*150, problem_restatement="x"*1600, keywords="建模、优化")
         if schema is _AssumptionsNotationOut:
-            return _AssumptionsNotationOut(assumptions="x"*150, notation="x"*150)
+            return _AssumptionsNotationOut(assumptions="x"*1600, notation="x"*600)
         if schema is _ModelOut:
-            return _ModelOut(model_section="x"*400)
+            return _ModelOut(model_section="x"*4500)
         if schema is _SolutionOut:
-            return _SolutionOut(solution="x"*200)
+            return _SolutionOut(solution="x"*2800)
         if schema is _SensitivityOut:
-            return _SensitivityOut(sensitivity="x"*150)
+            return _SensitivityOut(sensitivity="x"*1800)
         if schema is _ConclusionOut:
-            return _ConclusionOut(conclusion="x"*150)
+            return _ConclusionOut(conclusion="x"*1600)
         if schema is _ReferencesOut:
-            return _ReferencesOut(references="-")
+            return _ReferencesOut(references="参考文献"*40)
         return None
 
     section_calls = {"n": 0}
@@ -199,12 +217,12 @@ def test_writer_paper_critic_loop_isolated(mocker):
             # 大纲：首轮后切换到 v2 标记
             mk = "v1" if _round["i"] == 0 else "v2"
             return WriterOutline(abstract=mk)
-        # section 调用：首轮 7 次后切到 v2
+        # 通用题的七个章节组都调用 LLM；完成首轮后切换到 v2 标记。
         section_calls["n"] += 1
         mk = "v1" if _round["i"] == 0 else "v2"
         out = _section_out(schema, mk)
         if section_calls["n"] % 7 == 0 and _round["i"] == 0:
-            _round["i"] = 1  # 首轮 7 节写完，下一轮 prep 会切 v2
+            _round["i"] = 1
         return out
 
     mocker.patch("math_agent.nodes.writer.complete", side_effect=_writer_complete)
@@ -243,3 +261,9 @@ def test_graph_has_table_assembler_node():
     assert "table_assembler" in g.nodes
     assert "evaluation" in g.nodes
     assert "paper_critic" in g.nodes
+
+
+def test_graph_commits_outputs_through_finalizer():
+    g = build_graph()
+    assert "latex" in g.nodes
+    assert "finalizer" in g.nodes

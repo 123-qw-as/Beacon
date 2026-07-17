@@ -1103,8 +1103,14 @@ function renderSettingsAdvanced() {
       </div>
     </div>
     <div class="field">
-      <span>LLM 超时（秒）</span>
-      <input id="setLlmTimeout" type="number" value="${settingsConfig.llmTimeout}" />
+      <span>普通调用最长等待（秒）</span>
+      <input id="setLlmTimeout" type="number" value="${settingsConfig.llmAttemptTimeout ?? settingsConfig.llmTimeout ?? 180}" />
+      <span class="field-hint">analyst、critic、coder 等常规节点；新设置将在下一次新运行或恢复运行时生效</span>
+    </div>
+    <div class="field">
+      <span>长文本调用最长等待（秒）</span>
+      <input id="setLlmLongTimeout" type="number" value="${settingsConfig.llmLongAttemptTimeout ?? 300}" />
+      <span class="field-hint">writer 大纲/章节、modeler 主模型；包含必要的等待与重试</span>
     </div>
     <div class="field">
       <span>前端端口</span>
@@ -1129,6 +1135,7 @@ function collectSettings() {
   const ragTopK = document.querySelector("#setRagTopK");
   const iterations = document.querySelector("#setIterations");
   const llmTimeout = document.querySelector("#setLlmTimeout");
+  const llmLongTimeout = document.querySelector("#setLlmLongTimeout");
   const port = document.querySelector("#setPort");
 
   if (apiBase) config.apiBase = apiBase.value;
@@ -1140,7 +1147,8 @@ function collectSettings() {
   if (ragEmbed) config.ragEmbeddingModel = ragEmbed.value;
   if (ragTopK) config.ragTopK = Number(ragTopK.value);
   if (iterations) config.maxModelIterations = Number(iterations.value);
-  if (llmTimeout) config.llmTimeout = Number(llmTimeout.value);
+  if (llmTimeout) config.llmAttemptTimeout = Number(llmTimeout.value);
+  if (llmLongTimeout) config.llmLongAttemptTimeout = Number(llmLongTimeout.value);
   if (port) config.port = Number(port.value);
   return config;
 }
@@ -1158,7 +1166,7 @@ settingsSave?.addEventListener("click", async () => {
   try {
     const config = collectSettings();
     await api("/api/config", { method: "POST", body: JSON.stringify(config) });
-    showToast("配置已保存");
+    showToast("配置已保存。新设置将在下一次新运行或恢复运行时生效。");
     await loadSettings();
   } catch (error) {
     showToast(`保存失败: ${error.message}`);
@@ -1166,25 +1174,23 @@ settingsSave?.addEventListener("click", async () => {
 });
 
 settingsReset?.addEventListener("click", async () => {
-  if (!confirm("确定要重置为默认值吗？")) return;
+  if (!confirm("确定要重置为默认值吗？（模型配置保留，仅重置端点、密钥与运行参数）")) return;
   try {
     await api("/api/config", {
       method: "POST",
       body: JSON.stringify({
         apiBase: "http://localhost:20128/v1",
         apiKey: "123456",
-        defaultModel: "deepseek-v4-flash-free",
-        strongModel: "deepseek-v4-flash-free",
-        figureModel: "deepseek-v4-flash-free",
-        llmTimeout: 300,
+        llmAttemptTimeout: 180,
+        llmLongAttemptTimeout: 300,
         maxModelIterations: 3,
         ragEnabled: false,
-        ragEmbeddingModel: "text-embedding-3-small",
+        ragEmbeddingModel: "ollama/bge-m3",
         ragTopK: 4,
         port: 5173,
       }),
     });
-    showToast("已重置为默认值");
+    showToast("已重置为默认值（模型配置保留）");
     await loadSettings();
   } catch (error) {
     showToast(`重置失败: ${error.message}`);

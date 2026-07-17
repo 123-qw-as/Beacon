@@ -180,9 +180,14 @@ class CodeArtifact(BaseModel):
     stderr: str = ""
     success: bool = False
     artifact_paths: list[str] = Field(default_factory=list)  # 生成的图、数据等
+    # 运行时 audit hook 实际观察到的附件读取路径。默认空列表保证旧 checkpoint 兼容。
+    read_paths: list[str] = Field(default_factory=list)
     # ponytail: 不新建 BaselineResult 模型，复用 CodeArtifact + category 区分
     # "figure" = 主方案绘图, "baseline:no_schedule" / "baseline:simple_pred" / "baseline:greedy" = 对照方案
     category: str = "figure"
+    # 只有 primary/baseline 可作为论文数值证据；supporting 仅用于补充图像，
+    # none 表示执行或输出校验失败。默认 primary 兼容旧 checkpoint/测试数据。
+    evidence_role: Literal["primary", "supporting", "baseline", "none"] = "primary"
     # 标识属于第几轮代码生成（coder 每次 retry 递增；一致性审查只看最新 batch）
     batch: int = 0
 
@@ -249,19 +254,36 @@ class FigureArtifact(BaseModel):
 
 class EvaluationReport(BaseModel):
     """对齐国赛四大标准 + 国一加分项。每项 0-10。"""
-    assumption_reasonableness: int = Field(ge=0, le=10)
-    modeling_creativity: int = Field(ge=0, le=10)
-    result_correctness: int = Field(ge=0, le=10)
-    writing_clarity: int = Field(ge=0, le=10)
-    extra_depth: int = Field(ge=0, le=10)  # 加分项：敏感性/创新/分析深度
-    overall: float = Field(ge=0, le=10)  # 加权总评
+    assumption_reasonableness: int = Field(ge=0, le=10, default=0)
+    modeling_creativity: int = Field(ge=0, le=10, default=0)
+    result_correctness: int = Field(ge=0, le=10, default=0)
+    writing_clarity: int = Field(ge=0, le=10, default=0)
+    extra_depth: int = Field(ge=0, le=10, default=0)  # 加分项：敏感性/创新/分析深度
+    overall: float = Field(ge=0, le=10, default=0)  # 加权总评
     issues: list[str] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
+    # 兼容 minimax-m3 等模型将各维度分嵌套在 scores 字典中输出
+    scores: dict[str, int] | None = Field(default=None)
 
 
 class HumanDecision(BaseModel):
     approved: bool
     notes: str = ""
+
+
+class ArtifactDigest(BaseModel):
+    size: int = 0
+    sha256: str = ""
+
+
+class FinalizationReport(BaseModel):
+    """一次运行的可机读终态；只有 finalizer 可以写入。"""
+
+    status: Literal["pending", "completed", "degraded", "failed"] = "pending"
+    issues: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    artifacts: dict[str, ArtifactDigest] = Field(default_factory=dict)
+    completed_at: str = ""
 
 
 class PaperSections(BaseModel):
@@ -300,6 +322,7 @@ class MathModelingState(BaseModel):
     # 评估（覆盖语义）
     evaluation: EvaluationReport | None = None
     human_decision: HumanDecision | None = None
+    finalization: FinalizationReport = Field(default_factory=FinalizationReport)
 
     # 流程控制（覆盖语义）
     iteration: int = 0
@@ -318,6 +341,34 @@ class MathModelingState(BaseModel):
     writer_section_queue: list[str] = Field(default_factory=list)
     writer_outline_dump: dict = Field(default_factory=dict)   # WriterOutline.model_dump()
     writer_retrieved_context: str = ""                        # RAG 检索结果，prep 查一次 section 复用
+
+    # 可恢复子流程状态（覆盖语义）。昂贵调用成功后由 LangGraph 立即持久化，
+    # recover 只会继续当前工作项，不会重做已经完成的工作。
+    modeler_phase: str = "done"              # done | derive | check
+    modeler_draft: ModelVersion | None = None
+    modeler_derivation_queue: list[str] = Field(default_factory=list)
+    modeler_completed_derivations: list[DerivationStep] = Field(default_factory=list)
+
+    coder_phase: str = "done"                # done | generate | execute
+    coder_work_queue: list[dict] = Field(default_factory=list)
+    coder_work_artifacts: list[CodeArtifact] = Field(default_factory=list)
+    coder_current_batch: int = 0
+    coder_pending_draft: dict = Field(default_factory=dict)
+
+    sensitivity_phase: str = "done"          # done | code_generate | code_execute | interpret
+    sensitivity_plan_dump: dict = Field(default_factory=dict)
+    sensitivity_code_attempt: int = 0
+    sensitivity_code_error: str = ""
+    sensitivity_code_error_kind: str = ""
+    sensitivity_previous_code: str = ""
+    sensitivity_pending_runs: list[SensitivityRun] = Field(default_factory=list)
+    sensitivity_pending_code: str = ""
+
+    figure_phase: str = "done"               # done | critic | analysis
+    figure_work_queue: list[dict] = Field(default_factory=list)
+    figure_current_critic: dict = Field(default_factory=dict)
+    figure_critic_attempt: int = 0
+    figure_work_results: list[FigureArtifact] = Field(default_factory=list)
     # table_assembler 产出的清洗/注入警告（覆盖语义；每次 table_assembler 运行整体替换）
     table_warnings: list[str] = Field(default_factory=list)
 

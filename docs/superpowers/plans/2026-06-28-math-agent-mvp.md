@@ -1,5 +1,7 @@
 # 数学建模多智能体系统 MVP 实现计划（Plan A）
 
+> **历史方案记录（非现行事实源）**：路径、状态、命令和待办保留当时上下文；当前实现与限制见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 基于 LiteLLM + LangGraph 跑通一条"问题 → 假设 → 渐进式建模（含 Critic 循环）→ 代码执行 → 论文初稿（Markdown）"的端到端最小闭环，作为后续 Sensitivity / Figure / LaTeX / Evaluation 等子系统的承载骨架。

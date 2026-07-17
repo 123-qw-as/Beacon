@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import re
 
-from math_agent.tools.runner import extract_numeric_results
+from math_agent.tools.runner import (
+    infer_entity_upper_bound,
+    validate_numeric_results,
+)
 
 # 禁用词 → 替换词。顺序敏感：先替换单数 issue 再处理其他。
 # ponytail: 用 list 而非 dict，因为同一模式可能需要不同替换上下文。
@@ -79,6 +82,8 @@ def _sanitize_table_cell(text: str) -> str:
     text = text.replace("_", r"\_")
     text = text.replace("{", r"\{")
     text = text.replace("}", r"\}")
+    # 上标符号在纯文本表格中不能裸露，否则希腊字母转换后会触发 Missing $。
+    text = text.replace("^", r"\textasciicircum{}")
     return text
 
 
@@ -123,8 +128,16 @@ def _generate_sensitivity_table(runs: list) -> str:
         return ""
     lines = ["| 参数 | 取值范围 | 指标 | 指标变化范围 | 敏感性评级 |",
              "|---|---|---|---|---|"]
-    for r in runs:
-        vals = f"[{r.values[0]}, {r.values[-1]}]" if r.values else "—"
+    # Reducers preserve history for auditability; formal tables use only the
+    # newest evidence for each parameter.
+    latest: dict[str, object] = {}
+    for run in runs:
+        latest[run.parameter] = run
+    for r in latest.values():
+        vals = (
+            f"[{float(r.values[0]):.6g}, {float(r.values[-1]):.6g}]"
+            if r.values else "—"
+        )
         res = f"[{min(r.results):.4g}, {max(r.results):.4g}]" if r.results else "—"
         rating = _sensitivity_rating(r.results)
         lines.append(f"| {r.parameter} | {vals} | {r.metric} | {res} | {rating} |")
@@ -134,13 +147,22 @@ def _generate_sensitivity_table(runs: list) -> str:
 # baseline category → 中文显示名
 _BASELINE_NAMES = {
     "no_schedule": "无调度",
-    "simple_pred": "简单平均预测",
-    "greedy": "贪婪启发式",
+    "simple_pred": "定速预测",
+    "greedy": "贪婪构造",
     "ours": "本文方案",
 }
 
+_COMPARISON_METRICS = [
+    ("total_cost", "总成本"),
+    ("vehicles", "车辆"),
+    ("fuel_vehicles", "油车"),
+    ("ev_vehicles", "电车"),
+    ("total_carbon", "碳排放"),
+    ("timewin_rate", "时间窗率"),
+]
 
-def _generate_comparison_table(artifacts: list) -> str:
+
+def _generate_comparison_table(artifacts: list, max_entity_count: int | None = None) -> str:
     """从 code_artifacts 中提取 baseline 对照结果生成对比表。
 
     主方案（category='figure'）的 stdout 如果也含 RESULT: baseline=ours 也纳入。
@@ -149,29 +171,32 @@ def _generate_comparison_table(artifacts: list) -> str:
     """
     rows: list[dict[str, str]] = []
     for a in artifacts:
-        results = extract_numeric_results(a.stdout) if a.stdout else {}
+        if not a.success or a.evidence_role not in {"primary", "baseline"}:
+            continue
+        expected = a.category.split(":", 1)[1] if a.category.startswith("baseline:") else None
+        valid, _, results = validate_numeric_results(
+            a.stdout,
+            stderr=a.stderr,
+            require_result=True,
+            expected_identifier=expected,
+            max_entity_count=max_entity_count,
+        )
+        if not valid:
+            continue
         if not results:
-            if a.category.startswith("baseline:"):
-                cat_key = a.category.split(":", 1)[1]
-                name = _BASELINE_NAMES.get(cat_key, cat_key)
-                rows.append({"方案": name, "状态": "运行失败"})
             continue
         for identifier, metrics in results.items():
             name = _BASELINE_NAMES.get(identifier, identifier)
             row = {"方案": name}
-            row.update({k: str(v) for k, v in metrics.items()})
+            if "total_cost" not in metrics and "cost" in metrics:
+                metrics = {**metrics, "total_cost": metrics["cost"]}
+            row.update({label: str(metrics[key]) for key, label in _COMPARISON_METRICS if key in metrics})
             rows.append(row)
 
     if not rows:
         return ""
 
-    all_metrics: list[str] = []
-    seen = set()
-    for r in rows:
-        for k in r:
-            if k not in seen and k != "方案":
-                seen.add(k)
-                all_metrics.append(k)
+    all_metrics = [label for _, label in _COMPARISON_METRICS if any(label in row for row in rows)]
 
     if not all_metrics:
         all_metrics = ["状态"]
@@ -187,7 +212,9 @@ def _generate_comparison_table(artifacts: list) -> str:
     return "\n".join(lines)
 
 
-def _inject_table(section_text: str, title: str, table_md: str) -> str:
+def _inject_table(
+    section_text: str, title: str, table_md: str, *, replace_existing: bool = True,
+) -> str:
     """把表格注入 section 文本末尾。若已含同名 ## title 则跳过（去重）。
 
     table_md 为空则原样返回（表格生成器无数据时）。
@@ -195,6 +222,16 @@ def _inject_table(section_text: str, title: str, table_md: str) -> str:
     if not table_md:
         return section_text
     heading = f"## {title}"
+    if heading in section_text and replace_existing:
+        pattern = re.compile(
+            rf"(?m)^{re.escape(heading)}[ \t]*\n(?:[ \t]*\n)?(?:\|[^\n]*\n?)+"
+        )
+        replacement = f"{heading}\n\n{table_md}\n"
+        # Use a callable replacement so backslashes in LaTeX-safe table cells
+        # (for example ``\textasciicircum``) are not reinterpreted as ``\t``.
+        refreshed, count = pattern.subn(lambda _match: replacement, section_text, count=1)
+        if count:
+            return refreshed
     if heading in section_text:
         return section_text  # 已存在，不重复注入
     if section_text and not section_text.endswith("\n"):
@@ -227,7 +264,13 @@ def table_assembler_node(state: MathModelingState) -> dict:
     # 1) 生成并注入表格
     final_model = next((m for m in reversed(state.model_versions) if m.stage == "final"),
                        state.model_versions[-1] if state.model_versions else None)
-    if final_model and final_model.variables:
+    has_verified_green_primary = any(
+        artifact.success
+        and artifact.evidence_role == "primary"
+        and "BEACON_GREEN_LOGISTICS_SAFE_SOLVER" in artifact.code
+        for artifact in state.latest_code_artifacts()
+    )
+    if final_model and final_model.variables and not has_verified_green_primary:
         var_table = _generate_variable_table(final_model.variables)
         paper.notation = _inject_table(paper.notation, "模型变量表", var_table)
 
@@ -235,7 +278,10 @@ def table_assembler_node(state: MathModelingState) -> dict:
     paper.sensitivity = _inject_table(paper.sensitivity, "敏感性结果汇总表", sens_table)
 
     # 对比表（从 baseline artifacts 提取）
-    comp_table = _generate_comparison_table(state.latest_code_artifacts())
+    comp_table = _generate_comparison_table(
+        state.latest_code_artifacts(),
+        max_entity_count=infer_entity_upper_bound(state.data_files),
+    )
     paper.solution = _inject_table(paper.solution, "各方案结果对比表", comp_table)
 
     # 2) 禁用词清洗（所有 section）

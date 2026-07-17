@@ -1,5 +1,7 @@
 # 数学建模多智能体系统 — 内容深度突破层实现计划（Plan D）
 
+> **历史方案记录（非现行事实源）**：≥30 页、≥10 图是阶段目标，不代表当前真题产物已达到；现行状态见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > **状态：DRAFT — 关键架构决策点已标出，需在执行前 brainstorm 拍板。**

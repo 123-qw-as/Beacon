@@ -1,242 +1,214 @@
+from math_agent.nodes.writer import (
+    _build_section_fallback,
+    _build_sensitivity_text,
+    _result_evidence,
+    _should_use_deterministic_writer,
+    _verified_abstract_problem,
+    _verified_assumptions_notation,
+    _verified_conclusion_section,
+    _verified_model_section,
+    _verified_solution,
+    _verified_sensitivity_section,
+    _verified_green_references,
+    render_markdown,
+)
 from math_agent.state import (
+    CodeArtifact,
     MathModelingState,
     ModelVersion,
-    CodeArtifact,
-    PaperSections,
-    Assumption,
     SensitivityRun,
-    FigureArtifact,
 )
-from math_agent.nodes.writer import writer_node, writer_section_node, render_markdown
-from math_agent.prompts.writer import build_prompt
-from math_agent.prompts.writer_section import WriterOutline
 
 
-def _rich_state() -> MathModelingState:
-    s = MathModelingState(problem="共享单车调度优化")
-    s.assumptions.extend([
-        Assumption(statement="需求服从 Poisson 分布", rationale="日志拟合 KS=0.92"),
-        Assumption(statement="车辆调度成本线性", rationale="厂商提供的运维台账"),
-        Assumption(statement="站点容量上界 50", rationale="物理桩位实测"),
-    ])
-    s.model_versions.append(ModelVersion(
-        stage="final",
-        description="带容量约束的时变需求 M/M/c 排队网络",
-        equations=[r"\lambda_i(t) = \alpha_i + \beta_i \sin(\omega t)"],
-        variables={"lambda": "到达率", "mu": "服务率"},
-        notes="相对 improved 引入了时变到达",
-    ))
-    s.code_artifacts.append(CodeArtifact(
-        purpose="求解最优调度", code="...", success=True,
-        stdout="A" * 1000 + "FINAL_RESULT=42.7",
-    ))
-    s.code_artifacts.append(CodeArtifact(
-        purpose="验证收敛", code="...", success=True,
-        stdout="B" * 1000 + "CONVERGED_AT_ITER=18",
-    ))
-    s.sensitivity_runs.append(SensitivityRun(
-        parameter="alpha", values=[0.1, 0.2, 0.3], metric="total_cost",
-        results=[100.0, 120.0, 155.0], interpretation="成本对 alpha 高敏感",
-    ))
-    s.figures.append(FigureArtifact(
-        path="figs/f1.png", purpose="敏感性曲线",
-        caption="alpha-cost 曲线", analysis="alpha 超过 0.25 后成本陡增 30%",
-    ))
-    return s
-
-
-def test_writer_fills_paper(mocker):
-    """prep 返回队列；section 节点逐节填充 paper。"""
-    from math_agent.prompts.writer_section import (
-        WriterOutline, _AbstractProblemOut, _AssumptionsNotationOut,
-        _ModelOut, _SolutionOut, _SensitivityOut, _ConclusionOut, _ReferencesOut,
+def _state() -> MathModelingState:
+    return MathModelingState(
+        problem="城市绿色物流配送调度",
+        model_versions=[
+            ModelVersion(
+                stage="final",
+                description="车辆路径与充电联合优化",
+                equations=[r"\min C=\sum_{i,j}c_{ij}x_{ij}"],
+                variables={"x_i_j": "车辆是否经过弧(i,j)的0-1变量"},
+            )
+        ],
+        code_artifacts=[
+            CodeArtifact(
+                purpose="求解",
+                code="",
+                stdout=(
+                    "RESULT: baseline=ours total_cost=123.4 service_rate=0.98\n"
+                    r"saved=plot.png data_dir=C:\Users\demo\problem"
+                ),
+                success=True,
+                batch=1,
+            )
+        ],
+        sensitivity_runs=[
+            SensitivityRun(
+                parameter="c_v_dist",
+                values=[0.8, 1.0, 1.2],
+                metric="total_cost",
+                results=[100.0, 110.0, 125.0],
+                interpretation="成本随距离系数上升。",
+            )
+        ],
     )
-    payloads = {
-        WriterOutline: WriterOutline(),
-        _AbstractProblemOut: _AbstractProblemOut(
-            abstract="a"*200, problem_restatement="b"*200, keywords="k"),
-        _AssumptionsNotationOut: _AssumptionsNotationOut(assumptions="c"*200, notation="d"*200),
-        _ModelOut: _ModelOut(model_section="e"*200),
-        _SolutionOut: _SolutionOut(solution="f"*200),
-        _SensitivityOut: _SensitivityOut(sensitivity="s"*200),
-        _ConclusionOut: _ConclusionOut(conclusion="g"*200),
-        _ReferencesOut: _ReferencesOut(references="h"),
-    }
-    mocker.patch("math_agent.nodes.writer.complete",
-                 side_effect=lambda prompt, *, schema, **kw: payloads[schema])
-    s = MathModelingState(problem="p")
-    s.model_versions.append(ModelVersion(stage="final", description="d"))
-    s.code_artifacts.append(CodeArtifact(purpose="x", code="c", success=True, stdout="42"))
-
-    # prep：返回队列，不返回 paper
-    delta = writer_node(s)
-    assert delta["writer_iteration"] == 1
-    assert len(delta["writer_section_queue"]) == 7
-
-    # 逐节写完：把 prep 产出灌进 state，逐节调用 section node
-    s.writer_iteration = 1
-    s.writer_outline_dump = delta["writer_outline_dump"]
-    s.writer_retrieved_context = delta["writer_retrieved_context"]
-    s.writer_section_queue = delta["writer_section_queue"]
-    while s.writer_section_queue:
-        step = writer_section_node(s)
-        s.paper = step["paper"]
-        s.writer_section_queue = step["writer_section_queue"]
-    assert s.paper.abstract.startswith("a")
 
 
-def test_render_markdown_contains_sections():
-    s = MathModelingState(problem="P")
-    s.paper = PaperSections(abstract="A", problem_restatement="B", assumptions="C",
-                            notation="D", model_section="E", solution="F",
-                            sensitivity="S", conclusion="H", references="I")
-    s.code_artifacts.append(CodeArtifact(purpose="x", code="print(1)", success=True, stdout="1"))
-    md = render_markdown(s)
-    assert "## 摘要" in md and "## 7. 模型评价" in md
-    assert "## 6. 敏感性分析" in md
-    assert "print(1)" in md
+def test_deterministic_writer_is_explicit_only(monkeypatch):
+    monkeypatch.delenv("MATH_AGENT_WRITER_DETERMINISTIC", raising=False)
+    assert not _should_use_deterministic_writer()
+    monkeypatch.setenv("MATH_AGENT_WRITER_DETERMINISTIC", "1")
+    assert _should_use_deterministic_writer()
 
 
-def test_render_markdown_normalizes_and_quotes_figure_paths():
-    from math_agent.state import FigureArtifact
-    state = MathModelingState(problem="P")
-    state.figures.append(FigureArtifact(
-        path=r"C:\runs\my figure.png", purpose="图",
-    ))
+def test_fallback_text_has_real_newlines_and_no_encoding_pollution():
+    state = _state()
+    for group in (
+        "abstract_problem",
+        "assumptions_notation",
+        "model",
+        "solution",
+        "sensitivity",
+        "conclusion",
+        "references",
+    ):
+        output = _build_section_fallback(group, state)
+        for value in output.model_dump().values():
+            assert "???" not in value
+            assert r"\n" not in value
+
+
+def test_solution_evidence_excludes_machine_paths():
+    state = _state()
+    evidence = _result_evidence(state)
+    assert evidence == ["RESULT: baseline=ours total_cost=123.4 service_rate=0.98"]
+    assert "C:" not in "\n".join(evidence)
+
+
+def test_sensitivity_names_are_markdown_code_not_raw_latex_identifiers():
+    text = _build_sensitivity_text(_state())
+    assert "`c_v_dist`" in text
+    assert "`total_cost`" in text
+    assert r"c\_v\_dist" not in text
+
+
+def test_render_markdown_excludes_stale_supporting_metrics():
+    state = _state()
+    state.code_artifacts = [
+        CodeArtifact(
+            purpose="主求解", code="print('main')", success=True,
+            evidence_role="primary",
+            stdout="RESULT: baseline=ours total_cost=123.4 service_rate=0.98",
+        ),
+        CodeArtifact(
+            purpose="旧补充图", code="print('stale')", success=True,
+            evidence_role="supporting",
+            stdout="RESULT: baseline=ours total_cost=999999 service_rate=0.01",
+        ),
+    ]
+
     markdown = render_markdown(state)
-    assert "![](C:/runs/my%20figure.png)" in markdown
+
+    assert "total_cost=123.4" in markdown
+    assert "999999" not in markdown
+    assert "旧补充图" not in markdown
 
 
-# ---- build_prompt: 上游素材完整传递 ----
-
-def test_prompt_includes_each_assumption_with_rationale():
-    s = _rich_state()
-    p = build_prompt(s)
-    for a in s.assumptions:
-        assert a.statement in p
-        assert a.rationale in p
-
-
-def test_prompt_keeps_per_artifact_stdout_tail():
-    s = _rich_state()
-    p = build_prompt(s)
-    assert "FINAL_RESULT=42.7" in p
-    assert "CONVERGED_AT_ITER=18" in p
+def test_verified_model_section_matches_executed_contract():
+    text = _verified_model_section()
+    assert "SERVICE_TIME" not in text
+    assert "20" in text
+    assert "3000" in text and "13.5" in text
+    assert "(0,0)" in text
+    assert "不提供全局最优性" in text
+    assert "局部事件响应" in text
 
 
-def test_prompt_includes_sensitivity_numbers_and_interpretation():
-    s = _rich_state()
-    p = build_prompt(s)
-    assert "alpha" in p
-    assert "[0.1, 0.2, 0.3]" in p
-    assert "[100.0, 120.0, 155.0]" in p
-    assert "成本对 alpha 高敏感" in p
+def test_verified_sensitivity_section_uses_checkpoint_values():
+    state = _state()
+    state.sensitivity_runs = [
+        SensitivityRun(
+            parameter="c_late", values=[50, 100, 150], metric="Z",
+            results=[99, 100, 101], interpretation="单调上升。",
+        ),
+        SensitivityRun(
+            parameter="beta_v(fuel)", values=[0.05, 0.1, 0.15], metric="Z",
+            results=[90, 100, 110], interpretation="影响较强。",
+        ),
+        SensitivityRun(
+            parameter="green_zone_radius", values=[5, 10, 15], metric="Z",
+            results=[100, 100, 102], interpretation="半径扩大后上升。",
+        ),
+    ]
+
+    text = _verified_sensitivity_section(state)
+
+    assert "value/100" in text
+    assert "0.1 元/kg" in text
+    assert "[99.00, 100.00, 101.00]" in text
+    assert "图 B.1" in text and "图 B.3" in text
 
 
-def test_prompt_includes_figure_analysis():
-    s = _rich_state()
-    p = build_prompt(s)
-    assert "alpha 超过 0.25 后成本陡增 30%" in p
+def test_verified_green_paper_meets_competition_body_content_budgets():
+    state = _state()
+    abstract_problem = _verified_abstract_problem(state)
+    assumptions_notation = _verified_assumptions_notation(state)
+    sections = {
+        "abstract": abstract_problem.abstract,
+        "problem_restatement": abstract_problem.problem_restatement,
+        "assumptions": assumptions_notation.assumptions,
+        "notation": assumptions_notation.notation,
+        "model_section": _verified_model_section(),
+        "solution": _verified_solution(state).solution,
+        "sensitivity": _verified_sensitivity_section(state),
+        "conclusion": _verified_conclusion_section(state),
+    }
+    minimum_chars = {
+        "abstract": 300,
+        "problem_restatement": 1600,
+        "assumptions": 1600,
+        "notation": 600,
+        "model_section": 4500,
+        "solution": 2800,
+        "sensitivity": 1800,
+        "conclusion": 1600,
+    }
+
+    for field, minimum in minimum_chars.items():
+        actual = len("".join(sections[field].split()))
+        assert actual >= minimum, f"{field}: {actual} < {minimum}"
+    assert sum(len("".join(text.split())) for text in sections.values()) >= 16000
 
 
-# ---- build_prompt: IRON RULES 与字数预算 ----
+def test_verified_green_writer_uses_profile_stress_and_domain_references():
+    state = _state()
+    state.code_artifacts = [CodeArtifact(
+        purpose="主方案",
+        code="# BEACON_GREEN_LOGISTICS_SAFE_SOLVER",
+        stdout=(
+            "RESULT: baseline=ours total_cost=100 vehicles=2 service_rate=1 "
+            "total_carbon=3 total_distance=8 fuel_vehicles=1 ev_vehicles=1 "
+            "avg_delivery_time=60 timewin_rate=1 fuel_ratio=.5 response_time=.001 "
+            "dynamic_reinserted=1 dynamic_distance_change=2 dynamic_distance_improved=0\n"
+            "DATA_PROFILE: order_rows=300 customers=120 active_customers=118 "
+            "tasks=140 total_weight=80000 total_volume=400 green_customers=25 "
+            "split_customers=18 median_window_width=240 missing_weight=0 missing_volume=0\n"
+            "DYNAMIC_STRESS: samples=30 success=29 success_rate=.9667 "
+            "mean_response_ms=1.2 p95_response_ms=2.4 mean_distance_change=3.5 "
+            "max_distance_change=7.8 improved=4 mean_late_change=.6\n"
+        ),
+        success=True,
+        evidence_role="primary",
+    )]
 
-def test_prompt_contains_iron_rules():
-    p = build_prompt(_rich_state())
-    assert "IRON RULES" in p
-    assert "禁编造数据" in p
-    assert "禁占位" in p
+    abstract = _verified_abstract_problem(state).abstract
+    solution = _verified_solution(state).solution
+    conclusion = _verified_conclusion_section(state)
+    references = _verified_green_references()
 
-
-def test_prompt_contains_word_budget_per_section():
-    p = build_prompt(_rich_state())
-    # 关键预算锚点（Plan D: 大幅提升字数下限以保证正文 ≥20 页）
-    assert "400–600" in p          # abstract
-    assert "3000–5000" in p        # model_section
-    assert "1000–1800" in p        # sensitivity
-
-
-def test_prompt_contains_chinese_style_blocklist():
-    p = build_prompt(_rich_state())
-    assert "深入探讨" in p
-    assert "至关重要" in p
-    assert "众所周知" in p
-
-
-def test_writer_increments_writer_iteration(mocker):
-    mocker.patch("math_agent.nodes.writer.complete", return_value=WriterOutline())
-    s = MathModelingState(problem="p")
-    delta = writer_node(s)
-    assert delta["writer_iteration"] == 1
-
-    s2 = MathModelingState(problem="p")
-    s2.writer_iteration = 1
-    delta2 = writer_node(s2)
-    assert delta2["writer_iteration"] == 2
-
-
-def test_prompt_includes_prior_paper_critic_feedback():
-    from math_agent.state import CriticReport, CriticIssue
-    s = _rich_state()
-    s.writer_iteration = 1
-    s.critic_reports.append(CriticReport(
-        target="paper", score=4, approved=False,
-        issues=[CriticIssue(section="solution", problem="solution 段的 46 秒数字未在 stdout 中出现")],
-        suggestions=["要么删掉数字，要么改成定性描述"],
-    ))
-    p = build_prompt(s)
-    assert "solution 段的 46 秒数字未在 stdout 中出现" in p
-    assert "要么删掉数字" in p
-
-
-def test_prompt_omits_critic_section_when_no_prior_review():
-    p = build_prompt(_rich_state())
-    assert "上一轮 PaperCritic 反馈" not in p
-
-
-def test_prompt_includes_latex_compat_rule():
-    """IRON RULE 4：数学符号 $...$、禁 markdown 标题、禁裸 % # &。"""
-    p = build_prompt(_rich_state())
-    assert "LaTeX 兼容" in p
-    assert "$...$" in p
-    assert "希腊字母" in p
-    assert "markdown 标题" in p
-
-
-def test_writer_does_not_query_rag_when_disabled(mocker):
-    from math_agent.nodes.writer import writer_node as _wn
-    mocker.patch("math_agent.nodes.writer.RAG_ENABLED", False)
-    spy = mocker.patch("math_agent.nodes.writer.search")
-    mocker.patch(
-        "math_agent.nodes.writer.complete",
-        return_value=WriterOutline(),
-    )
-    _wn(_rich_state())
-    spy.assert_not_called()
-
-
-def test_writer_queries_rag_when_enabled(mocker):
-    from math_agent.nodes.writer import writer_node as _wn
-    mocker.patch("math_agent.nodes.writer.RAG_ENABLED", True)
-    mocker.patch("math_agent.nodes.writer.RAG_DB_PATH", "/tmp/nonexistent.db")
-    spy = mocker.patch("math_agent.nodes.writer.search", return_value=[])
-    mocker.patch(
-        "math_agent.nodes.writer.complete",
-        return_value=WriterOutline(),
-    )
-    _wn(_rich_state())
-    spy.assert_called_once()
-
-
-def test_writer_filters_rag_by_paper_source_type(mocker):
-    """writer 要写作风格，检索时过滤 source_type='paper'。"""
-    from math_agent.nodes.writer import writer_node as _wn
-    mocker.patch("math_agent.nodes.writer.RAG_ENABLED", True)
-    mocker.patch("math_agent.nodes.writer.RAG_DB_PATH", "/tmp/nonexistent.db")
-    spy = mocker.patch("math_agent.nodes.writer.search", return_value=[])
-    mocker.patch(
-        "math_agent.nodes.writer.complete",
-        return_value=WriterOutline(),
-    )
-    _wn(_rich_state())
-    assert spy.call_args.kwargs.get("source_type") == "paper"
+    assert "118" in abstract and "30" in abstract
+    assert "数据画像" in solution and "动态压力测试" in solution
+    assert "96.67%" in solution and "29" in conclusion
+    assert references.count("\n[") >= 7
+    assert "Solomon" in references and "Pillac" in references

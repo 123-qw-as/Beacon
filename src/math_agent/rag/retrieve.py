@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from math_agent.errors import MathAgentError
 from math_agent.rag.embeddings import embed_texts
 from math_agent.rag.store import VectorStore
 
@@ -37,6 +38,9 @@ def search(
         # 过滤无结果 → 退回全库 top-k，避免 writer 要论文却只有 model_lib 时返空。
         if not rows and source_type is not None:
             rows = store.search(vec, k=k)
+    except MathAgentError as exc:
+        print(f"[rag] retrieval skipped: {type(exc).__name__}: {exc}", flush=True)
+        return []
     finally:
         store.close()
     return [Snippet(text=r.text, source=r.source, score=r.score,

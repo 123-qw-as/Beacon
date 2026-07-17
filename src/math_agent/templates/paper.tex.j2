@@ -8,10 +8,21 @@
 \usepackage{array}
 \usepackage{float}          % 提供 [H]：钉死图片位置，避免最后一张图独占一空页
 \usepackage{listings}       % 附录代码块 \begin{lstlisting}
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  columns=fullflexible,
+  breaklines=true,
+  breakatwhitespace=false,
+  keepspaces=true,
+  showstringspaces=false
+}
 \geometry{margin=2.5cm}
 \setCJKmainfont{SimSun}            % 系统无 SimSun 时编译失败回退到 Markdown
+\renewcommand{\abstractname}{摘要}
+\renewcommand{\figurename}{图}
+\renewcommand{\tablename}{表}
 \title{ {{- problem -}} }
-\author{Math Agent}
+\author{}
 \date{}
 \begin{document}
 \maketitle
@@ -19,6 +30,7 @@
 \begin{abstract}
 {{ paper.abstract }}
 \end{abstract}
+\noindent\textbf{关键词：} {{ paper.keywords }}
 
 \section{问题重述}
 {{ paper.problem_restatement }}
@@ -40,7 +52,7 @@
 {% for fig in figures %}
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.75\linewidth]{ {{- fig.path -}} }
+\includegraphics[width=0.90\linewidth]{ {{- fig.path -}} }
 \caption{ {{- fig.caption | default(fig.purpose) -}} }
 \end{figure}
 
@@ -53,9 +65,11 @@
 {{ paper.sensitivity }}
 
 {% for r in sensitivity_runs %}
+{% if r.interpretation %}
 \subsubsection*{ {{- r.parameter -}} }
 {{ r.interpretation }}
 
+{% endif %}
 {% endfor %}
 
 \section{模型评价与结论}
@@ -76,9 +90,9 @@
 
 {% if art.curated_stdout %}
 \subsubsection*{关键输出摘要}
-\begin{verbatim}
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize,breaklines=true,breakatwhitespace=false,columns=fullflexible]
 {{ art.curated_stdout }}
-\end{verbatim}
+\end{lstlisting}
 {% endif %}
 
 {% endif %}

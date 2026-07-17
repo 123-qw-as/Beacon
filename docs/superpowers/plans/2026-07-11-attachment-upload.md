@@ -1,5 +1,7 @@
 # 附件上传功能 Implementation Plan
 
+> **历史方案记录（非现行事实源）**：附件上传已进入现行前端与后端；旧路径、状态和待办保留当时上下文，当前说明见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让用户上传 PDF/Word 题面和 xlsx/csv 附件，系统提取摘要注入 analyst prompt，传递文件路径给 coder/sensitivity 直接读取真实数据。

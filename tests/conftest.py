@@ -26,6 +26,27 @@ def _disable_rag_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _disable_llm_fallback_by_default(monkeypatch):
+    """单元测试不继承开发机 .env 的真实备用模型；专项测试会显式开启。"""
+    monkeypatch.setenv("MATH_AGENT_LLM_FALLBACK_MODELS", "")
+    import math_agent.llm as _llm
+    monkeypatch.setattr(_llm, "LLM_FALLBACK_MODELS", ())
+    for state in (
+        _llm._MODEL_UNHEALTHY_UNTIL,
+        _llm._MODEL_FAILURE_STREAK,
+        _llm._MODEL_SUCCESS_STREAK,
+    ):
+        state.clear()
+    yield
+    for state in (
+        _llm._MODEL_UNHEALTHY_UNTIL,
+        _llm._MODEL_FAILURE_STREAK,
+        _llm._MODEL_SUCCESS_STREAK,
+    ):
+        state.clear()
+
+
+@pytest.fixture(autouse=True)
 def _disable_scholar_network_by_default(monkeypatch):
     """默认禁用 Semantic Scholar 网络调用，避免 writer 等测试真打外网（慢/flaky）。
 

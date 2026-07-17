@@ -45,10 +45,11 @@ def test_truncate_caption_cuts_at_period():
     assert out == "曲线整体呈下降趋势，表明成本增加。", out
 
 
-def test_truncate_caption_falls_back_to_comma_when_no_period():
+def test_truncate_caption_turns_fallback_comma_into_sentence_end():
     src = "帕累托前沿图展示，调度方案权衡运营成本与用户满意度分析"
     out = _truncate_caption(src, max_chars=10)
-    assert out.endswith("，"), out
+    assert out.endswith("。"), out
+    assert not out.endswith("，"), out
 
 
 def test_truncate_caption_hard_cut_when_no_boundary():
@@ -97,3 +98,13 @@ def test_default_paper_tex_template_declares_tabularx_and_booktabs():
     assert r"\usepackage{booktabs}" in src
     assert r"\usepackage{float}" in src
     assert r"\begin{figure}[H]" in src
+
+
+def test_tex_templates_break_long_code_lines():
+    template_dir = (Path(__file__).resolve().parent.parent.parent
+                    / "src" / "math_agent" / "templates")
+    for name in ("paper.tex.j2", "gmcm.tex.j2"):
+        src = (template_dir / name).read_text(encoding="utf-8")
+        assert r"breaklines=true" in src
+        assert r"breakatwhitespace=false" in src
+        assert r"columns=fullflexible" in src

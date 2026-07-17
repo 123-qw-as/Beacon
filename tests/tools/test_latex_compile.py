@@ -23,7 +23,8 @@ hello
 
 
 def test_compile_latex_returns_failure_when_xelatex_missing(monkeypatch, workdir):
-    monkeypatch.setattr("shutil.which", lambda _: None)
+    monkeypatch.setattr("math_agent.tools.latex_compile._xelatex_candidates", lambda: [])
+    monkeypatch.setattr("math_agent.tools.latex_compile._tectonic_candidates", lambda: [])
     tex = workdir / "main.tex"
     tex.write_text(r"\documentclass{article}\begin{document}x\end{document}", encoding="utf-8")
     res = compile_latex(tex)
@@ -33,7 +34,8 @@ def test_compile_latex_returns_failure_when_xelatex_missing(monkeypatch, workdir
 
 
 def test_latex_result_carries_error_kind_when_missing(monkeypatch, workdir):
-    monkeypatch.setattr("shutil.which", lambda _: None)
+    monkeypatch.setattr("math_agent.tools.latex_compile._xelatex_candidates", lambda: [])
+    monkeypatch.setattr("math_agent.tools.latex_compile._tectonic_candidates", lambda: [])
     tex = workdir / "main.tex"
     tex.write_text(r"\documentclass{article}\begin{document}x\end{document}", encoding="utf-8")
     res = compile_latex(tex)
@@ -45,7 +47,8 @@ def test_compile_latex_does_not_accept_stale_pdf(mocker, workdir):
     tex.write_text(r"\documentclass{article}", encoding="utf-8")
     stale = workdir / "main.pdf"
     stale.write_bytes(b"old pdf")
-    mocker.patch("math_agent.tools.latex_compile.shutil.which", return_value="xelatex")
+    mocker.patch("math_agent.tools.latex_compile._xelatex_candidates", return_value=["xelatex"])
+    mocker.patch("math_agent.tools.latex_compile._tectonic_candidates", return_value=[])
     mocker.patch(
         "math_agent.tools.latex_compile.subprocess.run",
         return_value=mocker.MagicMock(returncode=1, stdout="Emergency stop", stderr=""),

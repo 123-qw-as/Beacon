@@ -1,5 +1,7 @@
 # Writer ↔ PaperCritic 闭环 Implementation Plan
 
+> **历史方案记录（非现行事实源）**：路径、状态、命令和待办保留当时上下文；当前实现与限制见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 `writer → paper_critic` 的直边换成闭环——critic 不通过且未到迭代上限时回 writer 重写；writer 接收上一轮 critic 反馈作为修订提示。压住"writer 编数字"问题：critic 看到 IRON RULE 违例就打回。

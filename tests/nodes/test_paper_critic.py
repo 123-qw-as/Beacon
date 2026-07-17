@@ -56,8 +56,8 @@ def test_prompt_omits_stdout_block_when_empty():
     assert "代码运行真实输出" not in prompt
 
 
-def test_paper_critic_node_passes_last_successful_stdout(mocker):
-    """节点：从 state.code_artifacts 取最后一个 success=True 的 stdout 传给 build_prompt。"""
+def test_paper_critic_node_passes_all_valid_result_evidence(mocker):
+    """评审与 writer 使用同一批有效 RESULT，失败或无协议输出均不进入 prompt。"""
     captured = {}
 
     def _capture(prompt, **kw):
@@ -70,8 +70,14 @@ def test_paper_critic_node_passes_last_successful_stdout(mocker):
     s.code_artifacts.append(CodeArtifact(purpose="x", code="...", success=False,
                                           stdout="OLD_FAILED", stderr="error"))
     s.code_artifacts.append(CodeArtifact(purpose="y", code="...", success=True,
-                                          stdout="NEW_TRUE_VALUE=52.7174", stderr=""))
+                                          stdout="RESULT: baseline=ours total_cost=52.7174 service_rate=0.95", stderr=""))
+    s.code_artifacts.append(CodeArtifact(
+        purpose="z", code="...", success=True,
+        stdout="RESULT: baseline=greedy total_cost=60 service_rate=0.90",
+        category="baseline:greedy",
+    ))
     delta = paper_critic_node(s)
     assert delta["critic_reports"][0].target == "paper"
-    assert "NEW_TRUE_VALUE=52.7174" in captured["prompt"]
+    assert "total_cost=52.7174" in captured["prompt"]
+    assert "baseline=greedy" in captured["prompt"]
     assert "OLD_FAILED" not in captured["prompt"]

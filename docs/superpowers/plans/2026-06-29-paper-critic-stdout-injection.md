@@ -1,5 +1,7 @@
 # PaperCritic 注入 stdout — Implementation Plan
 
+> **历史方案记录（非现行事实源）**：路径、状态、命令和待办保留当时上下文；当前实现与限制见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让 paper_critic 看到 coder 的真实 stdout，**用语义判断**正文中的关键数字是否与代码运行结果相符；不做正则字面对照（避免合理四舍五入被误判为编造）。

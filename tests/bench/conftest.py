@@ -30,11 +30,13 @@ _ALL_KEYWORDS = ["覆盖", "无人机", "鲁棒", "内涝", "排水", "风险"]
 def _make_paper(keywords: list[str]) -> PaperSections:
     """生成必含给定 keywords 的 paper（每段都含一遍）。"""
     kw_line = "、".join(keywords) if keywords else "（无）"
-    body = f"本研究围绕 {kw_line} 展开，模型经过 basic->improved->final 演化。" * 5
+    unit = f"本研究围绕 {kw_line} 展开，模型经过 basic->improved->final 演化。"
     return PaperSections(
-        abstract=body, problem_restatement=body, assumptions=body,
-        notation=body, model_section=body, solution=body,
-        sensitivity=body, conclusion=body, references="-",
+        abstract=(unit * 30)[:600], problem_restatement=unit * 100,
+        keywords="建模、优化", assumptions=unit * 100,
+        notation=unit * 40, model_section=unit * 280,
+        solution=unit * 180, sensitivity=unit * 120,
+        conclusion=unit * 100, references="参考文献" * 40,
     )
 
 
@@ -72,23 +74,41 @@ def _setup_mocks(stack: ExitStack, *, paper: PaperSections,
            side_effect=itertools.cycle([CriticReport(target="modeler", score=9, approved=True)]))
 
     _patch("math_agent.nodes.coder.complete",
-           side_effect=itertools.cycle([CoderDraft(purpose="主结果", code="print('done')")]))
+           side_effect=itertools.cycle([CoderDraft(
+               purpose="主结果",
+               code=(
+                   "for name, cost in [('ours', 100), ('no_schedule', 110), "
+                   "('simple_pred', 105), ('greedy', 120)]:\n"
+                   " print(f'RESULT: baseline={name} total_cost={cost} vehicles=1 '"
+                   "'service_rate=1 total_carbon=1')"
+               ),
+           )]))
 
     # model_code_consistency 审查通过
     _patch("math_agent.nodes.model_code_consistency.complete",
            side_effect=itertools.cycle([ModelCodeConsistencyReport(score=9, approved=True)]))
 
-    sens_plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [1, 2, 3, 4, 5],
-                                       "metric": "y", "rationale": "r"}])
+    sens_plan = SensitivityPlan(runs=[{
+        "parameter": "speed_multiplier", "values": [0.8, 1.0, 1.2],
+        "metric": "total_cost", "rationale": "r",
+    }])
     sens_code = SensitivityCode(code=(
         "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-        "v=[1,2,3,4,5]; r=[x*2 for x in v]\n"
-        "plt.plot(v,r); plt.savefig('lambda.png')\n"
-        "print(f'RESULT: parameter=lambda values={v} results={r}')\n"
+        "v=[0.8,1.0,1.2]; r=[100,100,100]\n"
+        "plt.plot(v,r); plt.savefig('speed_multiplier.png')\n"
+        "print(f'RESULT: parameter=speed_multiplier values={v} results={r}')\n"
     ))
-    sens_interp = Interpretations(interpretations=["lambda 越大 y 线性增长。"])
-    _patch("math_agent.nodes.sensitivity.complete",
-           side_effect=itertools.cycle([sens_plan, sens_code, sens_interp]))
+    sens_interp = Interpretations(interpretations=["速度扰动下总成本保持稳定。"])
+    def _sensitivity_complete(prompt, *, schema, **kw):
+        if schema is SensitivityPlan:
+            return sens_plan
+        if schema is SensitivityCode:
+            return sens_code
+        if schema is Interpretations:
+            return sens_interp
+        raise AssertionError(f"unexpected sensitivity schema: {schema}")
+
+    _patch("math_agent.nodes.sensitivity.complete", side_effect=_sensitivity_complete)
 
     _patch("math_agent.nodes.figure_pipeline.complete",
            side_effect=itertools.cycle([
@@ -104,7 +124,8 @@ def _setup_mocks(stack: ExitStack, *, paper: PaperSections,
     _section_payloads = {
         WriterOutline: WriterOutline(),
         _AbstractProblemOut: _AbstractProblemOut(
-            abstract=paper.abstract, problem_restatement=paper.problem_restatement, keywords=""),
+            abstract=paper.abstract, problem_restatement=paper.problem_restatement,
+            keywords=paper.keywords),
         _AssumptionsNotationOut: _AssumptionsNotationOut(assumptions=paper.assumptions, notation=paper.notation),
         _ModelOut: _ModelOut(model_section=paper.model_section),
         _SolutionOut: _SolutionOut(solution=paper.solution),

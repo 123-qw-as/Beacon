@@ -2,14 +2,24 @@ from math_agent.config import MODEL_ROUTING
 from math_agent.llm import complete
 from math_agent.prompts.paper_critic import SYSTEM, build_prompt
 from math_agent.state import CriticIssue, CriticReport, MathModelingState
+from math_agent.tools.runner import extract_valid_result_lines, infer_entity_upper_bound
 
 
 def _last_successful_stdout(state: MathModelingState) -> str:
-    """最后一个 success=True 的 code_artifact.stdout。没有则空串。"""
-    for art in reversed(state.latest_code_artifacts()):
-        if art.success:
-            return art.stdout
-    return ""
+    """汇总当前批次所有通过统一门禁的 RESULT，确保评审与 writer 同源。"""
+    lines: list[str] = []
+    upper_bound = infer_entity_upper_bound(state.data_files)
+    for art in state.latest_code_artifacts():
+        if not art.success or art.evidence_role not in {"primary", "baseline"}:
+            continue
+        expected = art.category.split(":", 1)[1] if art.category.startswith("baseline:") else None
+        lines.extend(extract_valid_result_lines(
+            art.stdout,
+            stderr=art.stderr,
+            expected_identifier=expected,
+            max_entity_count=upper_bound,
+        ))
+    return "\n".join(lines)
 
 
 def paper_critic_node(state: MathModelingState) -> dict:

@@ -32,6 +32,9 @@ corpus/papers/
 # Tooling / temp files
 .superpowers/
 .zcode/
+tmp/
+nul
+*preview_diff*
 *.log
 test.png
 *.err.log

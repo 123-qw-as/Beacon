@@ -13,9 +13,9 @@ from math_agent.nodes.coder import coder_node, CoderDraft
 def test_coder_calls_once_per_figure_purpose(mocker, workdir):
     """modeler 给 3 个 figure_purposes → coder 发 3 次 complete（每次首跑即成功）。"""
     drafts = [
-        CoderDraft(purpose="时序图", code="print('fig1')"),
-        CoderDraft(purpose="路径图", code="print('fig2')"),
-        CoderDraft(purpose="饼图", code="print('fig3')"),
+        CoderDraft(purpose="时序图", code="print('RESULT: baseline=ours total_cost=10 service_rate=0.9')"),
+        CoderDraft(purpose="路径图", code="print('RESULT: baseline=ours total_cost=10 service_rate=0.9')"),
+        CoderDraft(purpose="饼图", code="print('RESULT: baseline=ours total_cost=10 service_rate=0.9')"),
     ]
     spy = mocker.patch("math_agent.nodes.coder.complete", side_effect=drafts)
     s = MathModelingState(problem="p", output_dir=str(workdir))
@@ -31,13 +31,19 @@ def test_coder_calls_once_per_figure_purpose(mocker, workdir):
     assert len(figure_arts) == 3
     assert len(figure_calls) == 3  # 每个图 1 次调用，全部首跑成功
     assert all(a.success for a in figure_arts)
+    assert [a.evidence_role for a in figure_arts] == ["primary", "supporting", "supporting"]
+    assert "唯一主方案证据" in figure_calls[1].args[0]
+    assert all(call.kwargs["profile"] == "code" for call in figure_calls)
 
 
 def test_coder_falls_back_to_single_call_without_figure_purposes(mocker, workdir):
     """无 figure_purposes → 用 model.description 当 purpose，单次调用（向后兼容）。"""
     mocker.patch(
         "math_agent.nodes.coder.complete",
-        return_value=CoderDraft(purpose="solve", code="print('ok')"),
+        return_value=CoderDraft(
+            purpose="solve",
+            code="print('RESULT: baseline=ours total_cost=10 service_rate=0.9')",
+        ),
     )
     s = MathModelingState(problem="p", output_dir=str(workdir))
     s.model_versions.append(ModelVersion(stage="final", description="the model"))
@@ -53,8 +59,8 @@ def test_coder_retries_per_figure_independently(mocker, workdir):
     """fig0 先失败后成功，fig1 首跑成功 → 共 3 次 complete、3 个 artifact。"""
     drafts = [
         CoderDraft(purpose="fig0a", code="raise RuntimeError('x')"),
-        CoderDraft(purpose="fig0b", code="print('fig0 ok')"),
-        CoderDraft(purpose="fig1", code="print('fig1 ok')"),
+        CoderDraft(purpose="fig0b", code="print('RESULT: baseline=ours total_cost=10 service_rate=0.9')"),
+        CoderDraft(purpose="fig1", code="print('RESULT: baseline=ours total_cost=10 service_rate=0.9')"),
     ]
     mocker.patch("math_agent.nodes.coder.complete", side_effect=drafts)
     s = MathModelingState(problem="p", output_dir=str(workdir))
@@ -78,11 +84,18 @@ def test_coder_workdir_uses_fig_index(mocker, workdir):
 
     mocker.patch(
         "math_agent.nodes.coder.complete",
-        return_value=CoderDraft(purpose="p", code="print('ok')"),
+        return_value=CoderDraft(
+            purpose="p",
+            code="print('RESULT: baseline=ours total_cost=10 service_rate=0.9')",
+        ),
     )
     spy_run = mocker.patch(
         "math_agent.nodes.coder.run_python",
-        return_value=RunResult(success=True, stdout="ok", error_kind=""),
+        return_value=RunResult(
+            success=True,
+            stdout="RESULT: baseline=ours total_cost=10 service_rate=0.9",
+            error_kind="",
+        ),
     )
     s = MathModelingState(problem="p", output_dir=str(workdir))
     s.model_versions.append(ModelVersion(
@@ -100,6 +113,7 @@ def test_coder_workdir_uses_fig_index(mocker, workdir):
 def test_coder_records_error_when_all_figures_fail(mocker, workdir):
     """所有图所有 attempts 都失败 → delta.errors 记录，且计数含全部尝试。"""
     from itertools import cycle
+    from math_agent.config import MAX_CODE_RETRIES
     mocker.patch(
         "math_agent.nodes.coder.complete",
         side_effect=cycle([CoderDraft(purpose="p", code="raise RuntimeError('boom')")]),
@@ -113,8 +127,8 @@ def test_coder_records_error_when_all_figures_fail(mocker, workdir):
 
     assert "errors" in delta and delta["errors"]
     assert delta["errors"][0].startswith("coder:")
-    # 2 张图 × (1 + 1 retry) = 4 次尝试全失败
-    assert len(delta["code_artifacts"]) == 4
+    # 主求解耗尽重试后立即结束本批次，补充图不得顶替主证据。
+    assert len(delta["code_artifacts"]) == MAX_CODE_RETRIES + 1
     assert all(a.success is False for a in delta["code_artifacts"])
 
 
@@ -122,7 +136,10 @@ def test_coder_figure_one_prompt_contains_purpose(mocker, workdir):
     """单图 prompt 应把当前 purpose 写进去，让 LLM 知道画哪张图。"""
     spy = mocker.patch(
         "math_agent.nodes.coder.complete",
-        return_value=CoderDraft(purpose="p", code="print('ok')"),
+        return_value=CoderDraft(
+            purpose="p",
+            code="print('RESULT: baseline=ours total_cost=10 service_rate=0.9')",
+        ),
     )
     s = MathModelingState(problem="p", output_dir=str(workdir))
     s.model_versions.append(ModelVersion(

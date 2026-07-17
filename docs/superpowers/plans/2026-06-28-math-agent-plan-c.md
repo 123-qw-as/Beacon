@@ -1,5 +1,7 @@
 # 数学建模多智能体系统 — 鲁棒性与扩展层实现计划（Plan C）
 
+> **历史方案记录（非现行事实源）**：路径、状态、命令和待办保留当时上下文；当前实现与限制见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在 Plan A/B 已经跑通完整流水线（含敏感性、图表、PaperCritic、Evaluation、HITL、LaTeX）的基础上，把"统一错误处理与重试、RAG 知识库注入、历年题回归基准、链路追踪与运行报告"四块工程能力补齐，让系统从"能跑"走向"能稳定跑、能复盘、能持续改进"。

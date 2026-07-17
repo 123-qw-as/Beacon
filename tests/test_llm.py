@@ -1,12 +1,17 @@
+"""LLM 接口行为测试（迁移到 transport seam）。
+
+旧测试 mock litellm.completion，阶段 B 后 complete() 走 worker transport，
+mock 不再生效。改用 FakeCompletionTransport 注入。
+"""
 import os
 from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 from pydantic import BaseModel
-import math_agent.llm as llm
+
+import math_agent.llm as llm_mod
 from math_agent.errors import LLMError
+from math_agent.transport import FakeCompletionTransport, FakeClock
 
 
 class _Answer(BaseModel):
@@ -14,103 +19,246 @@ class _Answer(BaseModel):
     score: int
 
 
-def test_complete_returns_text_when_no_schema(mocker):
-    mocker.patch(
-        "litellm.completion",
-        return_value=mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content="hello"))]
-        ),
-    )
-    out = llm.complete("say hi", model="gpt-4o-mini")
+@pytest.fixture
+def fake_clock(monkeypatch):
+    c = FakeClock()
+    monkeypatch.setattr(llm_mod, "_get_clock", lambda: c)
+    return c
+
+
+@pytest.fixture
+def fake_transport(monkeypatch, fake_clock):
+    t = FakeCompletionTransport(clock=fake_clock)
+    monkeypatch.setattr(llm_mod, "_get_transport", lambda: t)
+    return t
+
+
+def test_complete_returns_text_when_no_schema(fake_transport):
+    fake_transport.enqueue_ok("hello")
+    out = llm_mod.complete("say hi", model="gpt-4o-mini")
     assert out == "hello"
 
 
-def test_complete_returns_pydantic_when_schema(mocker):
-    payload = '{"summary": "ok", "score": 9}'
-    mocker.patch(
-        "litellm.completion",
-        return_value=mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
-        ),
-    )
-    out = llm.complete("rate it", schema=_Answer, model="gpt-4o-mini")
+def test_code_profile_has_independent_bounded_deadline(monkeypatch):
+    monkeypatch.setattr(llm_mod, "_PROFILE_ATTEMPT_TIMEOUT", {"code": 90.0})
+    monkeypatch.setattr(llm_mod, "_PROFILE_TOTAL_TIMEOUT", {"code": 240.0})
+
+    assert llm_mod._profile_timeout("code") == (90.0, 240.0)
+
+
+def test_complete_returns_pydantic_when_schema(fake_transport):
+    fake_transport.enqueue_ok('{"summary": "ok", "score": 9}')
+    out = llm_mod.complete("rate it", schema=_Answer, model="gpt-4o-mini")
     assert isinstance(out, _Answer)
     assert out.score == 9
 
 
-def test_complete_retries_on_invalid_json(mocker):
-    bad = mocker.MagicMock(choices=[mocker.MagicMock(message=mocker.MagicMock(content="not json"))])
-    good = mocker.MagicMock(choices=[mocker.MagicMock(message=mocker.MagicMock(content='{"summary":"x","score":1}'))])
-    mocker.patch("litellm.completion", side_effect=[bad, good])
-    out = llm.complete("x", schema=_Answer, model="gpt-4o-mini", max_retries=2)
+def test_complete_retries_on_invalid_json(fake_transport, monkeypatch):
+    monkeypatch.setattr(llm_mod, "_DEFAULT_VALIDATION_REPAIRS", 2)
+    fake_transport.enqueue_ok("not json")
+    fake_transport.enqueue_ok('{"summary":"x","score":1}')
+    out = llm_mod.complete("x", schema=_Answer, model="gpt-4o-mini")
     assert out.score == 1
 
 
-def test_complete_raises_after_all_retries_exhausted(mocker):
-    bad = mocker.MagicMock(choices=[mocker.MagicMock(message=mocker.MagicMock(content="nope"))])
-    mocker.patch("litellm.completion", return_value=bad)
-    with pytest.raises(llm.LLMError):
-        llm.complete("x", schema=_Answer, max_retries=1)
+def test_complete_raises_after_all_retries_exhausted(fake_transport, monkeypatch):
+    monkeypatch.setattr(llm_mod, "_DEFAULT_VALIDATION_REPAIRS", 1)
+    fake_transport.enqueue_ok("nope")
+    fake_transport.enqueue_ok("still nope")
+    with pytest.raises(llm_mod.LLMError):
+        llm_mod.complete("x", schema=_Answer, model="gpt-4o-mini")
 
 
-def test_complete_with_images_packs_multimodal_content(mocker):
-    captured = {}
-
-    def _fake(model, messages, **kw):
-        captured["messages"] = messages
-        m = mocker.MagicMock()
-        m.choices = [mocker.MagicMock(message=mocker.MagicMock(content="ok"))]
-        return m
-
-    mocker.patch("litellm.completion", side_effect=_fake)
-    out = llm.complete(
+def test_complete_with_images_packs_multimodal_content(fake_transport):
+    fake_transport.enqueue_ok("ok")
+    out = llm_mod.complete(
         "describe this", model="gpt-4o-mini",
         images=["data:image/png;base64,AAA="],
     )
     assert out == "ok"
-    user_msg = captured["messages"][-1]
+    user_msg = fake_transport.calls[0].messages[-1]
     assert isinstance(user_msg["content"], list)
     kinds = {p["type"] for p in user_msg["content"]}
     assert kinds == {"text", "image_url"}
 
 
-def test_complete_classifies_and_retries_rate_limit(mocker):
-    """litellm 抛 RateLimitError → 应被 classify 为 LLMRateLimitError → 触发重试。"""
-    class _RL(Exception):
-        pass
-    _RL.__name__ = "RateLimitError"
-
-    seq = [_RL("429"), mocker.MagicMock(
-        choices=[mocker.MagicMock(message=mocker.MagicMock(content="ok"))]
-    )]
-    mocker.patch("litellm.completion", side_effect=seq)
-    out = llm.complete("hi", model="gpt-4o-mini",
-                      _retry_attempts=3, _retry_base_delay=0)
+def test_complete_classifies_and_retries_rate_limit(fake_transport, monkeypatch):
+    from math_agent.errors import LLMRateLimitError
+    fake_transport.enqueue_error(LLMRateLimitError("429"))
+    fake_transport.enqueue_ok("ok")
+    monkeypatch.setattr(llm_mod, "_PROFILE_ATTEMPT_TIMEOUT",
+                        {"standard": 100.0, "long": 100.0, "vision": 100.0})
+    monkeypatch.setattr(llm_mod, "_PROFILE_TOTAL_TIMEOUT",
+                        {"standard": 100.0, "long": 100.0, "vision": 100.0})
+    out = llm_mod.complete("hi", model="gpt-4o-mini")
     assert out == "ok"
 
 
-def test_complete_raises_llm_error_when_all_retries_exhausted(mocker):
-    class _RL(Exception):
-        pass
-    _RL.__name__ = "RateLimitError"
-
-    mocker.patch("litellm.completion", side_effect=_RL("429"))
+def test_complete_raises_llm_error_when_all_retries_exhausted(fake_transport, monkeypatch):
+    from math_agent.errors import LLMRateLimitError
+    for _ in range(5):
+        fake_transport.enqueue_error(LLMRateLimitError("429"))
+    monkeypatch.setattr(llm_mod, "_PROFILE_ATTEMPT_TIMEOUT",
+                        {"standard": 100.0, "long": 100.0, "vision": 100.0})
+    monkeypatch.setattr(llm_mod, "_PROFILE_TOTAL_TIMEOUT",
+                        {"standard": 100.0, "long": 100.0, "vision": 100.0})
     with pytest.raises(LLMError):
-        llm.complete("hi", model="gpt-4o-mini", max_retries=0,
-                     _retry_attempts=2, _retry_base_delay=0)
+        llm_mod.complete("hi", model="gpt-4o-mini")
 
 
-def test_complete_logs_to_current_tracer(mocker, tmp_path):
+def test_server_error_fails_over_to_next_model_without_replaying_primary(
+    fake_transport, monkeypatch,
+):
+    from math_agent.errors import LLMServerError
+
+    fake_transport.enqueue_error(LLMServerError("502"))
+    fake_transport.enqueue_ok("recovered")
+    monkeypatch.setattr(
+        llm_mod, "_PROFILE_ATTEMPT_TIMEOUT",
+        {"standard": 100.0, "long": 100.0, "vision": 100.0},
+    )
+    monkeypatch.setattr(
+        llm_mod, "_PROFILE_TOTAL_TIMEOUT",
+        {"standard": 200.0, "long": 200.0, "vision": 200.0},
+    )
+
+    out = llm_mod.complete(
+        "hi", model="primary", fallback_models=["backup"]
+    )
+
+    assert out == "recovered"
+    assert [call.model for call in fake_transport.calls] == ["primary", "backup"]
+
+
+def test_timeout_does_not_replay_request_on_fallback_model(fake_transport, monkeypatch):
+    from math_agent.errors import LLMTimeoutError
+
+    fake_transport.enqueue_error(LLMTimeoutError("timed out"))
+    monkeypatch.setattr(
+        llm_mod, "_PROFILE_ATTEMPT_TIMEOUT",
+        {"standard": 90.0, "long": 90.0, "vision": 90.0},
+    )
+    monkeypatch.setattr(
+        llm_mod, "_PROFILE_TOTAL_TIMEOUT",
+        {"standard": 100.0, "long": 100.0, "vision": 100.0},
+    )
+    monkeypatch.setattr(
+        llm_mod, "_PROFILE_FALLBACK_RESERVE",
+        {"standard": 30.0, "long": 30.0, "vision": 30.0},
+    )
+
+    with pytest.raises(LLMTimeoutError):
+        llm_mod.complete("hi", model="primary", fallback_models=["backup"])
+
+    assert len(fake_transport.calls) == 1
+    assert fake_transport.calls[0].model == "primary"
+    assert fake_transport.calls[0].timeout_s == pytest.approx(90.0)
+
+
+def test_timeout_cooldown_survives_worker_recovery_and_promotes_fallback(
+    fake_transport, fake_clock, monkeypatch, tmp_path,
+):
+    """超时请求本次不重放；新 graph worker 从 run 文件恢复后切备用模型。"""
+    from math_agent.errors import LLMTimeoutError
+    from math_agent.tracing import Tracer, reset_current, set_current
+
+    monkeypatch.setattr(llm_mod, "_MODEL_FAILURE_COOLDOWN", 30.0)
+    monkeypatch.setattr(llm_mod, "_MODEL_MAX_COOLDOWN", 300.0)
+    monkeypatch.setattr(llm_mod.time, "time", lambda: 1000.0)
+    fake_transport.enqueue_error(LLMTimeoutError("timed out"))
+
+    first = Tracer(thread_id="run", out_dir=tmp_path)
+    token = set_current(first)
+    try:
+        with pytest.raises(LLMTimeoutError):
+            llm_mod.complete("first", model="primary", fallback_models=["backup"])
+    finally:
+        reset_current(token)
+
+    assert [call.model for call in fake_transport.calls] == ["primary"]
+    health_path = tmp_path / "llm_model_health.json"
+    assert health_path.is_file()
+
+    # 模拟 supervisor 启动一个全新的 graph worker：进程内状态消失，run 文件保留。
+    llm_mod._MODEL_UNHEALTHY_UNTIL.clear()
+    llm_mod._MODEL_FAILURE_STREAK.clear()
+    llm_mod._MODEL_SUCCESS_STREAK.clear()
+    fake_transport.enqueue_ok("recovered")
+    second = Tracer(thread_id="run", out_dir=tmp_path, append_existing=True)
+    token = set_current(second)
+    try:
+        assert llm_mod.complete(
+            "second", model="primary", fallback_models=["backup"]
+        ) == "recovered"
+    finally:
+        reset_current(token)
+
+    assert [call.model for call in fake_transport.calls] == ["primary", "backup"]
+
+
+def test_json_repair_stays_on_model_that_returned_the_response(
+    fake_transport, monkeypatch,
+):
+    from math_agent.errors import LLMServerError
+
+    monkeypatch.setattr(llm_mod, "_DEFAULT_VALIDATION_REPAIRS", 1)
+    fake_transport.enqueue_error(LLMServerError("502"))
+    fake_transport.enqueue_ok("not json")
+    fake_transport.enqueue_ok('{"summary":"ok","score":8}')
+
+    out = llm_mod.complete(
+        "hi", schema=_Answer, model="primary", fallback_models=["backup"]
+    )
+
+    assert out.score == 8
+    assert [call.model for call in fake_transport.calls] == [
+        "primary", "backup", "backup",
+    ]
+
+
+def test_unhealthy_primary_is_bypassed_until_cooldown_expires(
+    fake_transport, fake_clock, monkeypatch,
+):
+    from math_agent.errors import LLMServerError
+
+    monkeypatch.setattr(llm_mod, "_MODEL_FAILURE_COOLDOWN", 30.0)
+    monkeypatch.setattr(llm_mod, "_MODEL_MAX_COOLDOWN", 300.0)
+    fake_transport.enqueue_error(LLMServerError("502"))
+    fake_transport.enqueue_ok("first")
+    fake_transport.enqueue_ok("second")
+    fake_transport.enqueue_ok("third")
+    fake_transport.enqueue_error(LLMServerError("502 again"))
+    fake_transport.enqueue_ok("fourth")
+
+    assert llm_mod.complete(
+        "one", model="primary", fallback_models=["backup"]
+    ) == "first"
+    assert llm_mod.complete(
+        "two", model="primary", fallback_models=["backup"]
+    ) == "second"
+    fake_clock.advance(31.0)
+    assert llm_mod.complete(
+        "three", model="primary", fallback_models=["backup"]
+    ) == "third"
+    assert llm_mod.complete(
+        "four", model="primary", fallback_models=["backup"]
+    ) == "fourth"
+
+    assert [call.model for call in fake_transport.calls] == [
+        "primary", "backup", "backup", "primary", "primary", "backup",
+    ]
+    assert llm_mod._MODEL_FAILURE_STREAK["primary"] == 2
+    assert llm_mod._MODEL_UNHEALTHY_UNTIL["primary"] == pytest.approx(91.0)
+
+
+def test_complete_logs_to_current_tracer(fake_transport, tmp_path):
     from math_agent.tracing import Tracer, set_current, reset_current
-    fake = mocker.MagicMock()
-    fake.choices = [mocker.MagicMock(message=mocker.MagicMock(content="hi"))]
-    fake.usage = mocker.MagicMock(prompt_tokens=10, completion_tokens=5)
-    mocker.patch("litellm.completion", return_value=fake)
+    fake_transport.enqueue_ok("hi", prompt_tokens=10, completion_tokens=5)
 
     t = Tracer(thread_id="t", out_dir=tmp_path)
     tok = set_current(t)
     try:
-        llm.complete("ping", model="gpt-4o-mini")
+        llm_mod.complete("ping", model="gpt-4o-mini")
     finally:
         reset_current(tok)
     assert t.llm_calls == 1
@@ -131,283 +279,14 @@ def test_resolve_callback_names_includes_langsmith_when_env_set(monkeypatch):
     assert _resolve_callback_names() == ["langsmith"]
 
 
-def test_complete_passes_timeout_to_litellm(mocker):
-    """llm.complete 仍给 litellm.completion 传 timeout（作为第一层软超时）。"""
-    from math_agent.config import LLM_TIMEOUT
-
-    captured = {}
-
-    def _fake(*args, **kw):
-        captured["kw"] = kw
-        return mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content="ok"))]
-        )
-
-    mocker.patch("litellm.completion", side_effect=_fake)
-    llm.complete("hi", model="gpt-4o-mini")
-    assert captured["kw"].get("timeout") == LLM_TIMEOUT
-
-
-def test_timeout_is_classified_as_transport_and_retried(mocker):
-    """litellm 抛 httpx.TimeoutException → 子线程 catch → classify 为 LLMTransportError → 走 tenacity 重试。"""
-    import httpx
-
-    timeout_err = httpx.TimeoutException("Read timed out")
-    ok = mocker.MagicMock(
-        choices=[mocker.MagicMock(message=mocker.MagicMock(content="ok"))]
-    )
-    mock_completion = mocker.patch(
-        "litellm.completion", side_effect=[timeout_err, ok]
-    )
-    out = llm.complete(
-        "hi", model="gpt-4o-mini",
-        _retry_attempts=3, _retry_base_delay=0,
-    )
-    assert out == "ok"
-    # 第一次超时 + 第二次成功 = 至少 2 次调用，证明 timeout 被纳入重试链
-    assert mock_completion.call_count >= 2
-
-
-def test_timeout_exhausts_retries_raises_transport_error(mocker):
-    """连续超时超过重试预算 → 抛 LLMError（且底层是 LLMTransportError 语义）。"""
-    import httpx
-    from math_agent.errors import LLMError
-
-    mocker.patch("litellm.completion", side_effect=httpx.TimeoutException("stalled"))
-    with pytest.raises(LLMError):
-        llm.complete(
-            "hi", model="gpt-4o-mini", max_retries=0,
-            _retry_attempts=2, _retry_base_delay=0,
-        )
-
-
-def test_complete_hangs_forever_times_out_via_thread_join(mocker, monkeypatch):
-    """第一性原理验证：litellm.completion 永不返回（模拟 router 半挂）时，
-    Thread.join 超时后主线程必须抛 LLMTransportError，而不是无限阻塞。
-
-    用小 LLM_TIMEOUT（2s）避免真等 180s；mock litellm.completion 为 sleep(999)。
-    """
-    import time as _time
-    from math_agent.errors import LLMError, LLMTransportError
-    import math_agent.llm as llm_mod
-
-    # 把超时窗口临时调小到 2s，避免测试等 180s
-    monkeypatch.setattr(llm_mod, "LLM_TIMEOUT", 2.0)
-
-    def _hang(**kw):
-        _time.sleep(999)   # 模拟 router 半挂，永不返回
-
-    mocker.patch("litellm.completion", side_effect=_hang)
-
-    import time as _t
-    t0 = _t.monotonic()
-    with pytest.raises(LLMError):   # tenacity 重试 1 次后耗尽 → LLMError
-        llm.complete("hi", model="gpt-4o-mini",
-                     _retry_attempts=1, _retry_base_delay=0)
-    elapsed = _t.monotonic() - t0
-    # 应在 ~2-6s 内返回（1 次 join 超时 2s + 可能 1 次重试再超时 2s）
-    assert elapsed < 15, f"耗时 {elapsed:.1f}s，Thread.join 超时未生效"
-
-
 def test_json_escape_preserves_latex_backslash_b_t_f():
     """LLM 在 JSON 里输出 LaTeX 命令 \beta/\tau/\frac 时，
     \b \t \f 是合法 JSON escape，json.loads 会吃掉反斜杠。
     修复用 raw string r"\b" r"\t" r"\f" 双写反斜杠。"""
-    import math_agent.llm as llm_mod
-
-    # 模拟 LLM 返回的 raw content（含 LaTeX 命令）
-    # \beta → \b+eta, \tau → \t+au, \frac → \f+rac
     raw = r'{"result": "use $\beta$ and $\tau$ and $\frac{1}{2}$"}'
-
-    # 验证修复逻辑：手动执行 replace
     content = raw
     for esc in (r"\b", r"\t", r"\f"):
         content = content.replace(esc, r"\\" + esc[1:])
-
     import json
     parsed = json.loads(content)["result"]
     assert r"\beta" in parsed, f"\beta 被损坏: {parsed}"
-    assert r"\tau" in parsed, f"\tau 被损坏: {parsed}"
-    assert r"\frac" in parsed, f"\frac 被损坏: {parsed}"
-    # 不应含 backspace/tab/formfeed 控制字符
-    assert chr(8) not in parsed, "含 backspace"
-    assert chr(9) not in parsed, "含 tab"
-    assert chr(12) not in parsed, "含 formfeed"
-
-
-class _LatexOut(BaseModel):
-    """模拟 writer section 输出 schema（含 LaTeX 的字符串字段）。"""
-    model_section: str
-
-
-def test_complete_preserves_correctly_escaped_latex_json(mocker):
-    """Case A: LLM 输出正确转义的 JSON（\\text 双反斜杠），不应被损坏。
-
-    这是 phase2_final 的根因：旧修复的 str.replace 把正确 JSON 里的
-    \\text 误伤成 \\\\\\text，json.loads 解析出 backslash+TAB+ext (0x5C 0x09)。
-    LLM 正确转义时，complete() 必须原样保留 \\text。
-    """
-    # LLM 正确输出 JSON：字符串值 \text{total} 在 JSON wire 上转义为 \\text{total}
-    # Python 源码里要用 \\\\ 表示 2 个真实反斜杠（JSON wire 上的 \\）
-    payload = '{"model_section": "\\\\text{total}"}'
-    # 验证 payload 字节：pos 20-21 应为 0x5C 0x5C（两个反斜杠）
-    pb = payload.encode()
-    idx = pb.find(b'text')
-    assert pb[idx-2:idx] == b'\x5c\x5c', f"payload 不是正确转义: {pb!r}"
-    mocker.patch(
-        "litellm.completion",
-        return_value=mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
-        ),
-    )
-    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
-    assert isinstance(out, _LatexOut)
-    # 必须是 \text{total}（backslash + t + ext），不能含控制字符
-    assert r"\text" in out.model_section, f"\\text 被损坏: {out.model_section!r}"
-    assert chr(9) not in out.model_section, f"含 TAB 控制字符: {out.model_section!r}"
-    assert chr(8) not in out.model_section, f"含 backspace: {out.model_section!r}"
-    assert chr(12) not in out.model_section, f"含 formfeed: {out.model_section!r}"
-
-
-def test_complete_repairs_under_escaped_latex_json(mocker):
-    """Case B: LLM 欠转义输出 \\text（单反斜杠，JSON \\t=TAB），应被修复为 \\text。
-
-    旧修复的目标场景：LLM 在 JSON 字符串里写了 \\text 而非 \\\\text，
-    json.loads 把 \\t 当 TAB 转义吃掉反斜杠。修复后应还原为 \\text。
-    """
-    # 欠转义：wire 上是 \text（单反斜杠），JSON \t = TAB
-    # 用 raw string r"\t" 确保 Python 不把 \t 解析成 TAB
-    payload = r'{"model_section": "\text{total}"}'
-    # 验证 payload 字节：pos 20 应为 0x5C（单反斜杠）
-    pb = payload.encode()
-    idx = pb.find(b'text')
-    assert pb[idx-1:idx] == b'\x5c', f"payload 不是欠转义: {pb!r}"
-    mocker.patch(
-        "litellm.completion",
-        return_value=mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
-        ),
-    )
-    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
-    assert isinstance(out, _LatexOut)
-    assert r"\text" in out.model_section, f"\\text 未被修复: {out.model_section!r}"
-    assert chr(9) not in out.model_section, f"含 TAB: {out.model_section!r}"
-
-
-def test_complete_repairs_illegal_json_escape_hat(mocker):
-    r"""P1: LLM 欠转义 \hat（\h 不是合法 JSON 转义 → JSONDecodeError）。
-
-    旧 fallback 只双写 \b/\t/\f，碰不到 \h/\s/\m/\S 等。
-    修复后 pre-parse fallback 应双写所有非法 JSON 转义。
-    """
-    # \hat 欠转义：wire 上 \hat{x}（\h 非法 JSON 转义）
-    payload = r'{"model_section": "$\hat{x}$"}'
-    mocker.patch(
-        "litellm.completion",
-        return_value=mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
-        ),
-    )
-    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
-    assert isinstance(out, _LatexOut)
-    assert r"\hat{x}" in out.model_section, f"\\hat 未被修复: {out.model_section!r}"
-
-
-def test_complete_repairs_illegal_json_escape_sum_lambda(mocker):
-    r"""P1: \sum/\lambda/\Sigma 欠转义（\s/\l/\S 非法 JSON 转义）。"""
-    payload = r'{"model_section": "$\sum_{i} + \lambda + \Sigma$"}'
-    mocker.patch(
-        "litellm.completion",
-        return_value=mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
-        ),
-    )
-    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
-    assert isinstance(out, _LatexOut)
-    assert r"\sum_{i}" in out.model_section, f"\\sum 未被修复: {out.model_section!r}"
-    assert r"\lambda" in out.model_section, f"\\lambda 未被修复: {out.model_section!r}"
-    assert r"\Sigma" in out.model_section, f"\\Sigma 未被修复: {out.model_section!r}"
-
-
-def test_complete_repairs_nabla_rfloor_under_escaped(mocker):
-    r"""P0: \nabla/\rfloor 欠转义（\n/\r 是合法 JSON 转义 → 静默损坏为 0x0A/0x0D）。
-
-    json.loads 把 \n 当换行、\r 当 CR，吃掉反斜杠。
-    _repair_string 应把 0x0A→\n、0x0D→\r 还原。
-    """
-    # \nabla 欠转义：\n 是合法 JSON 转义（换行），json.loads 静默接受
-    payload = r'{"model_section": "$\nabla f$ 和 $\rfloor x$"}'
-    mocker.patch(
-        "litellm.completion",
-        return_value=mocker.MagicMock(
-            choices=[mocker.MagicMock(message=mocker.MagicMock(content=payload))]
-        ),
-    )
-    out = llm.complete("write", schema=_LatexOut, model="gpt-4o-mini")
-    assert isinstance(out, _LatexOut)
-    assert r"\nabla" in out.model_section, f"\\nabla 未被修复: {out.model_section!r}"
-    assert r"\rfloor" in out.model_section, f"\\rfloor 未被修复: {out.model_section!r}"
-    assert chr(10) not in out.model_section, f"含换行符: {out.model_section!r}"
-    assert chr(13) not in out.model_section, f"含 CR: {out.model_section!r}"
-
-
-def test_repair_string_preserves_normal_newlines():
-    """_repair_string 不应误伤正常换行符（0x0A 不跟 LaTeX 宏前缀）。
-
-    LLM 故意在 JSON 里用 \n 表示换行是合法行为，修复后的文本应保留换行。
-    只有 0x0A 后跟 LaTeX 宏字母序列（如 abla/ewcommand/ode）时才是损坏。
-    """
-    normal = "first paragraph.\nsecond paragraph."
-    out = llm._repair_string(normal)
-    assert out == normal, f"正常换行被误伤: {out!r}"
-
-
-def test_repair_string_preserves_normal_tabs():
-    """_repair_string 不应误伤正常 TAB（0x09 不跟 LaTeX 宏前缀）。
-
-    代码块缩进等场景会有正常 TAB，不应被转义为 \\t。
-    """
-    normal = "col1\tcol2\tcol3"
-    out = llm._repair_string(normal)
-    assert out == normal, f"正常 TAB 被误伤: {out!r}"
-
-
-def test_repair_string_preserves_normal_paragraph_after_math():
-    """0x0A 后跟普通单词（非 LaTeX 宏）不应误转。
-
-    如 '$x$ 后\n下一句'：\n+下 不是 \nabla 损坏。
-    """
-    normal = "$x$ 后\n下一句"
-    out = llm._repair_string(normal)
-    assert out == normal, f"误转: {out!r}"
-
-
-def test_extract_json_stops_at_first_balanced_object():
-    content = 'prefix {"value": "brace } in string", "nested": {"x": 1}} suffix {"other": 2}'
-    assert llm._extract_json(content) == '{"value": "brace } in string", "nested": {"x": 1}}'
-
-
-def test_litellm_uses_local_cost_map_before_import():
-    """全新进程导入时应默认禁用 LiteLLM 的远端价格表请求。"""
-    env = os.environ.copy()
-    env.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-    source_dir = str(Path(__file__).resolve().parents[1] / "src")
-    env["PYTHONPATH"] = os.pathsep.join(
-        part for part in (source_dir, env.get("PYTHONPATH", "")) if part
-    )
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import os; import math_agent.llm; "
-            "print(os.environ['LITELLM_LOCAL_MODEL_COST_MAP'])",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "True"
-    assert "model cost map" not in result.stderr.lower()

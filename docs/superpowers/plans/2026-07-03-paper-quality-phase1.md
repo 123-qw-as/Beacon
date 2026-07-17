@@ -1,5 +1,7 @@
 # Paper Quality Improvement — Phase 1 Implementation Plan
 
+> **历史方案记录（非现行事实源）**：路径、状态、命令和待办保留当时上下文；当前实现与限制见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a `table_assembler` node that injects structured tables + cleans forbidden words after the writer/critic loop, rewrite paper templates to an 8-section judge-friendly structure, and curate the appendix — all without new code-execution runs.

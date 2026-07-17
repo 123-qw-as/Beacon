@@ -1,5 +1,7 @@
 # Plan C Runbook
 
+> 历史运维快照，不是现行故障处理手册。其中旧重试次数、旧 timeout 建议和旧文件名仅用于追溯；当前运行方式见 [`beacon-resilient-execution.md`](beacon-resilient-execution.md)。
+
 ## 1. RAG 索引
 
 ### 1.1 语料目录约定

@@ -13,13 +13,47 @@ const FIELD_MAP = {
   defaultModel: "MATH_AGENT_DEFAULT_MODEL",
   strongModel: "MATH_AGENT_STRONG_MODEL",
   figureModel: "MATH_AGENT_FIGURE_MODEL",
+  fallbackModels: "MATH_AGENT_LLM_FALLBACK_MODELS",
   llmTimeout: "MATH_AGENT_LLM_TIMEOUT",
+  // §8.3 新增：普通/长文本调用最长等待
+  llmAttemptTimeout: "MATH_AGENT_LLM_ATTEMPT_TIMEOUT",
+  llmLongAttemptTimeout: "MATH_AGENT_LLM_LONG_ATTEMPT_TIMEOUT",
   maxModelIterations: "MATH_AGENT_MAX_MODEL_ITERATIONS",
   ragEnabled: "MATH_AGENT_RAG_ENABLED",
   ragEmbeddingModel: "MATH_AGENT_RAG_EMBED",
   ragTopK: "MATH_AGENT_RAG_TOPK",
   port: "PORT",
 };
+
+/**
+ * LiteLLM 原生 provider 前缀：这些前缀会让 LiteLLM 走各自的传输协议
+ * （如 ollama 走 OLLAMA_API_BASE），不经过 OPENAI_API_BASE。
+ * 不在此列表的前缀（如 ocg）或裸模型名，一律补 openai/ 前缀，
+ * 让 LiteLLM 走 OpenAI 兼容协议打 OPENAI_API_BASE（本地 router）。
+ */
+const LITELLM_NATIVE_PREFIXES = new Set([
+  "openai", "azure", "anthropic", "bedrock", "vertex_ai", "gemini",
+  "ollama", "cohere", "mistral", "groq", "together_ai", "huggingface",
+  "fireworks_ai", "ai21", "nlp_cloud", "anyscale",
+]);
+
+/**
+ * 规范化模型名，确保 LiteLLM 能识别 provider。
+ * - 已带原生 provider 前缀（openai/、ollama/ 等）-> 原样返回
+ * - 裸模型名或未知前缀（如 ocg/）-> 补 openai/ 前缀走 OpenAI 兼容协议
+ * - 空值 -> 原样返回
+ */
+function normalizeModelForLitellm(model) {
+  if (!model || typeof model !== "string") return model;
+  const trimmed = model.trim();
+  if (!trimmed) return trimmed;
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex !== -1) {
+    const prefix = trimmed.slice(0, slashIndex).toLowerCase();
+    if (LITELLM_NATIVE_PREFIXES.has(prefix)) return trimmed;
+  }
+  return `openai/${trimmed}`;
+}
 
 /**
  * 解析 .env 文件为 key-value 对象。
@@ -88,11 +122,15 @@ export async function handleConfigRoutes(request, response, url) {
     const config = {
       apiBase: envVars.OPENAI_API_BASE || "",
       apiKey: maskApiKey(envVars.OPENAI_API_KEY || ""),
-      hasApiKey: !!(envVars.OPENAI_API_KEY && envVars.OPENAI_API_KEY !== "123456"),
+      hasApiKey: !!envVars.OPENAI_API_KEY,
       defaultModel: envVars.MATH_AGENT_DEFAULT_MODEL || "",
       strongModel: envVars.MATH_AGENT_STRONG_MODEL || "",
       figureModel: envVars.MATH_AGENT_FIGURE_MODEL || "",
+      fallbackModels: envVars.MATH_AGENT_LLM_FALLBACK_MODELS || "",
       llmTimeout: Number(envVars.MATH_AGENT_LLM_TIMEOUT || 300),
+      // §8.3：新超时变量（兼容旧 llmTimeout）
+      llmAttemptTimeout: Number(envVars.MATH_AGENT_LLM_ATTEMPT_TIMEOUT || envVars.MATH_AGENT_LLM_TIMEOUT || 180),
+      llmLongAttemptTimeout: Number(envVars.MATH_AGENT_LLM_LONG_ATTEMPT_TIMEOUT || 300),
       maxModelIterations: Number(envVars.MATH_AGENT_MAX_MODEL_ITERATIONS || 3),
       ragEnabled: envVars.MATH_AGENT_RAG_ENABLED === "1",
       ragEmbeddingModel: envVars.MATH_AGENT_RAG_EMBED || "text-embedding-3-small",
@@ -113,10 +151,23 @@ export async function handleConfigRoutes(request, response, url) {
     if (body.apiKey !== undefined && !body.apiKey.includes("***")) {
       updates[FIELD_MAP.apiKey] = body.apiKey;
     }
-    if (body.defaultModel !== undefined) updates[FIELD_MAP.defaultModel] = body.defaultModel;
-    if (body.strongModel !== undefined) updates[FIELD_MAP.strongModel] = body.strongModel;
-    if (body.figureModel !== undefined) updates[FIELD_MAP.figureModel] = body.figureModel;
+    if (body.defaultModel !== undefined) updates[FIELD_MAP.defaultModel] = normalizeModelForLitellm(body.defaultModel);
+    if (body.strongModel !== undefined) updates[FIELD_MAP.strongModel] = normalizeModelForLitellm(body.strongModel);
+    if (body.figureModel !== undefined) updates[FIELD_MAP.figureModel] = normalizeModelForLitellm(body.figureModel);
+    if (body.fallbackModels !== undefined) {
+      updates[FIELD_MAP.fallbackModels] = String(body.fallbackModels)
+        .split(",")
+        .map((model) => normalizeModelForLitellm(model))
+        .filter(Boolean)
+        .join(",");
+    }
     if (body.llmTimeout !== undefined) updates[FIELD_MAP.llmTimeout] = String(body.llmTimeout);
+    if (body.llmAttemptTimeout !== undefined) {
+      updates[FIELD_MAP.llmAttemptTimeout] = String(body.llmAttemptTimeout);
+      // 同步旧变量保持兼容
+      updates[FIELD_MAP.llmTimeout] = String(body.llmAttemptTimeout);
+    }
+    if (body.llmLongAttemptTimeout !== undefined) updates[FIELD_MAP.llmLongAttemptTimeout] = String(body.llmLongAttemptTimeout);
     if (body.maxModelIterations !== undefined) updates[FIELD_MAP.maxModelIterations] = String(body.maxModelIterations);
     if (body.ragEnabled !== undefined) updates[FIELD_MAP.ragEnabled] = body.ragEnabled ? "1" : "0";
     if (body.ragEmbeddingModel !== undefined) updates[FIELD_MAP.ragEmbeddingModel] = body.ragEmbeddingModel;

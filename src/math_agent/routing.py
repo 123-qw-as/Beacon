@@ -67,6 +67,26 @@ def after_writer_step(state: MathModelingState) -> str:
     return "section" if state.writer_section_queue else "done"
 
 
+def after_modeler_work(state: MathModelingState) -> str:
+    """模型子流程：每个推导步骤和一致性检查分别形成 checkpoint。"""
+    return state.modeler_phase if state.modeler_phase in {"derive", "check"} else "done"
+
+
+def after_coder_work(state: MathModelingState) -> str:
+    if state.coder_work_queue and state.coder_phase in {"generate", "execute"}:
+        return state.coder_phase
+    return "done"
+
+
+def after_sensitivity_work(state: MathModelingState) -> str:
+    valid = {"code_generate", "code_execute", "interpret"}
+    return state.sensitivity_phase if state.sensitivity_phase in valid else "done"
+
+
+def after_figure_work(state: MathModelingState) -> str:
+    return state.figure_phase if state.figure_phase in {"critic", "analysis"} else "done"
+
+
 def after_model_code_consistency(state: MathModelingState) -> str:
     """model_code_consistency 审查完后的去向。
 
@@ -79,6 +99,15 @@ def after_model_code_consistency(state: MathModelingState) -> str:
     report = state.model_code_reports[-1]
     if report.approved and report.score >= 7:
         return "advance"
+    latest = state.latest_code_artifacts()
+    has_primary = any(
+        artifact.success and artifact.evidence_role == "primary"
+        for artifact in latest
+    )
+    # 没有主证据不是“低分但可继续”的软问题，任何重试上限都不能把它放行到
+    # sensitivity/writer。下一 coder 批次可使用确定性安全求解器或明确失败。
+    if not has_primary:
+        return "retry_coder"
     if state.code_verify_iteration >= MAX_CODE_VERIFY_ITERATIONS:
         return "advance_with_warning"
     return "retry_coder"

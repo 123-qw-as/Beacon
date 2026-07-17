@@ -1,5 +1,7 @@
 # Coder/Runner 修复与可观察性增强计划
 
+> **历史方案记录（非现行事实源）**：路径、状态、命令和待办保留当时上下文；当前实现与限制见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 修复 `tools/runner.py` 的相对路径 bug，让 LLM 生成的代码真正能在沙箱里跑通；同时把 coder 全失败的情况显式回写到 `state.errors`，让下游 writer 不再"误把 success=False 当数字来源"。

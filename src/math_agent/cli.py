@@ -7,17 +7,32 @@ ingest  : 把语料目录嵌入到向量库（RAG 索引）
 bench   : 真跑历年题回归基准（live 模式）
 """
 from __future__ import annotations
+import hashlib
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
-from langgraph.checkpoint.sqlite import SqliteSaver
 from rich.console import Console
 from rich.table import Table
 
 from math_agent.graph import build_graph
+from math_agent.checkpointing import sqlite_saver
 from math_agent.state import HumanDecision, DataFileInfo
 from math_agent.errors import LLMError, LLMRateLimitError, LLMTransportError
+from math_agent.nodes.finalizer import load_verified_completion
+from math_agent.run_lock import RunLock, RunLockedError
+from math_agent.supervisor import (
+    SupervisorPolicy,
+    clear_failure_report,
+    failure_record_for_exception,
+    inspect_checkpoint,
+    reconcile_supervisor_state,
+    run_process_supervisor,
+    start_detached_supervisor,
+    write_failure_report,
+)
 from math_agent.tracing import (
     Tracer, get_last_node, set_current, reset_current, clear_failed_node,
 )
@@ -157,11 +172,21 @@ def _dump_state_summary(out: Path, thread: str = "default") -> None:
 def _saver_cm(out: Path):
     """返回 SqliteSaver 的 contextmanager；调用方需用 with 包起来。"""
     out.mkdir(parents=True, exist_ok=True)
-    return SqliteSaver.from_conn_string(str(out / "checkpoints.sqlite"))
+    return sqlite_saver(out / "checkpoints.sqlite")
 
 
 def _config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}}
+
+
+def _failure_node(exc: BaseException) -> str:
+    return str(getattr(exc, "_math_agent_failed_node", "") or get_last_node())
+
+
+def _record_failure(out: Path, exc: BaseException):
+    record = failure_record_for_exception(_failure_node(exc), exc)
+    write_failure_report(out, record)
+    return record
 
 
 def _require_checkpoint(out: Path) -> None:
@@ -228,6 +253,76 @@ def _read_problem_spec(problem: Path) -> dict:
             "data_files": data_files, "data_dir": data_dir}
 
 
+def _problem_fingerprint(spec: dict) -> str:
+    canonical = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _write_run_manifest(
+    out: Path, thread: str, spec: dict, *, no_interrupt: bool = False
+) -> None:
+    path = out / "run_manifest.json"
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps({
+            "thread": thread,
+            "problem_sha256": _problem_fingerprint(spec),
+            "no_interrupt": no_interrupt,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _validate_existing_run_manifest(out: Path, thread: str, spec: dict, force: bool) -> None:
+    if force or not (out / "checkpoints.sqlite").is_file():
+        return
+    path = out / "run_manifest.json"
+    if not path.is_file():
+        typer.echo("[supervisor] 旧 checkpoint 没有 run_manifest，按 thread 兼容恢复。", err=True)
+        return
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(f"run_manifest.json 损坏：{exc}", param_hint="--out") from exc
+    if manifest.get("thread") != thread:
+        raise typer.BadParameter(
+            f"输出目录属于 thread={manifest.get('thread')}，不是 {thread}", param_hint="--thread",
+        )
+    if manifest.get("problem_sha256") != _problem_fingerprint(spec):
+        raise typer.BadParameter(
+            "输出目录中的 checkpoint 属于另一道题；请换 --out，或明确使用 --force",
+            param_hint="--problem",
+        )
+
+
+def _prepare_run_output(out: Path, thread: str, force: bool) -> None:
+    """在 worker 锁内检查/清理输出目录，防止 --force 与活跃任务竞态。"""
+    checkpoint = out / "checkpoints.sqlite"
+    if checkpoint.exists() and not force:
+        typer.echo(
+            f"Output dir {out} already has a checkpoint (thread={thread}).\n"
+            f"  - Use a different --out to start a fresh run.\n"
+            f"  - Or append --force to overwrite the existing run.\n"
+            f"  - Or use `recover` to continue the existing run.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not force:
+        return
+    for checkpoint_file in (
+        checkpoint, Path(str(checkpoint) + "-wal"), Path(str(checkpoint) + "-shm"),
+    ):
+        checkpoint_file.unlink(missing_ok=True)
+    for stale_name in (
+        "trace.json", "state_summary.json", "paper.md", "paper.tex", "paper.pdf",
+        "completion.json", "final_state.json", "failure.json", "supervisor.json",
+        "run_manifest.json",
+    ):
+        (out / stale_name).unlink(missing_ok=True)
+
+
 @app.command()
 def run(
     problem: Path = typer.Option(..., exists=True, readable=True),
@@ -246,22 +341,6 @@ def run(
 
     # 防止以同一 --thread 重复输出到同一目录，掩盖上次 runs
     out.mkdir(parents=True, exist_ok=True)
-    chk = out / "checkpoints.sqlite"
-    if chk.exists() and not force:
-        typer.echo(
-            f"Output dir {out} already has a checkpoint (thread={thread}).\n"
-            f"  - Use a different --out to start a fresh run.\n"
-            f"  - Or append --force to overwrite the existing run.\n"
-            f"  - Or use `resume` to continue the existing run.",
-            err=True,
-        )
-        raise typer.Exit(1)
-    if chk.exists() and force:
-        # --force 的核心语义是开启全新 checkpoint；同时清掉 SQLite sidecar。
-        for checkpoint_file in (chk, Path(str(chk) + "-wal"), Path(str(chk) + "-shm")):
-            checkpoint_file.unlink(missing_ok=True)
-        for stale_name in ("trace.json", "state_summary.json", "paper.md", "paper.tex", "paper.pdf"):
-            (out / stale_name).unlink(missing_ok=True)
     interrupt = [] if no_interrupt else ["human_review"]
 
     initial = {
@@ -282,34 +361,51 @@ def run(
         "human_decision": HumanDecision(approved=True, notes="--no-interrupt") if no_interrupt else None,
     }
     clear_failed_node()
-    tracer = Tracer(thread_id=thread, out_dir=out)
-    tok = set_current(tracer)
+    tracer = None
+    tok = None
     try:
-        with _saver_cm(out) as saver:
-            g = build_graph(checkpointer=saver, interrupt_before=interrupt)
-            g.invoke(initial, config=_config(thread))
+        with RunLock(out):
+            _prepare_run_output(out, thread, force)
+            _write_run_manifest(out, thread, spec, no_interrupt=no_interrupt)
+            clear_failure_report(out)
+            tracer = Tracer(thread_id=thread, out_dir=out)
+            tok = set_current(tracer)
+            with _saver_cm(out) as saver:
+                g = build_graph(checkpointer=saver, interrupt_before=interrupt)
+                g.invoke(initial, config=_config(thread))
+    except RunLockedError as e:
+        typer.echo(f"[BUSY] {e}", err=True)
+        raise typer.Exit(75)
     except LLMTransportError as e:
-        typer.echo(f"\n[FAILED] LLM transport error at node '{get_last_node()}': {e}", err=True)
+        failure = _record_failure(out, e)
+        typer.echo(f"\n[FAILED] LLM transport error at node '{failure.node}': {e}", err=True)
         typer.echo(f"  Checkpoint saved (thread={thread}). Router may be temporarily unavailable.", err=True)
-        typer.echo(f"  Resume: python -m math_agent.cli resume --out {out} --thread {thread} --approve", err=True)
-        typer.echo(f"  Or: python -m math_agent.cli run ... --out {out} --thread {thread}")
+        typer.echo(f"  Recover: uv run math-agent recover --out {out} --thread {thread}", err=True)
         raise typer.Exit(1)
     except LLMRateLimitError as e:
-        typer.echo(f"\n[FAILED] Rate limit exhausted at node '{get_last_node()}': {e}", err=True)
+        failure = _record_failure(out, e)
+        typer.echo(f"\n[FAILED] Rate limit exhausted at node '{failure.node}': {e}", err=True)
         typer.echo(f"  Retry budget used up. Wait and resume:", err=True)
-        typer.echo(f"  python -m math_agent.cli resume --out {out} --thread {thread} --approve")
+        typer.echo(f"  uv run math-agent recover --out {out} --thread {thread}")
         raise typer.Exit(1)
     except LLMError as e:
-        typer.echo(f"\n[FAILED] LLM error at node '{get_last_node()}': {e}", err=True)
+        failure = _record_failure(out, e)
+        typer.echo(f"\n[FAILED] LLM error at node '{failure.node}': {e}", err=True)
         typer.echo(f"  Checkpoint saved (thread={thread}). This error may not be retriable.", err=True)
         raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except Exception as e:
+        failure = _record_failure(out, e)
         typer.echo(f"\n[FAILED] Unexpected error: {type(e).__name__}: {e}", err=True)
         typer.echo(f"  Checkpoint saved (thread={thread}). Debug trace at {out / 'trace.json'}")
         raise typer.Exit(1)
     finally:
-        tracer.flush()
-        reset_current(tok)
+        if tracer is not None:
+            tracer.flush()
+        if tok is not None:
+            reset_current(tok)
+    clear_failure_report(out)
     _dump_state_summary(out, thread)
     if interrupt:
         typer.echo(f"pipeline paused before human_review (thread={thread}); trace at {out / 'trace.json'}")
@@ -335,26 +431,34 @@ def resume(
     _require_checkpoint(out)
     _require_trace_thread(out, thread)
     clear_failed_node()
+    clear_failure_report(out)
     tracer = Tracer(thread_id=thread, out_dir=out, append_existing=True)
     tok = set_current(tracer)
     try:
-        with _saver_cm(out) as saver:
-            g = build_graph(checkpointer=saver, interrupt_before=["human_review"])
-            snapshot = g.get_state(_config(thread))
-            if snapshot is None or not snapshot.values:
-                raise ValueError(f"checkpoint has no state for thread={thread}")
-            g.update_state(_config(thread),
-                           {"human_decision": HumanDecision(approved=approve, notes=notes)})
-            g.invoke(None, config=_config(thread))
+        with RunLock(out):
+            with _saver_cm(out) as saver:
+                g = build_graph(checkpointer=saver, interrupt_before=["human_review"])
+                snapshot = g.get_state(_config(thread))
+                if snapshot is None or not snapshot.values:
+                    raise ValueError(f"checkpoint has no state for thread={thread}")
+                g.update_state(_config(thread),
+                               {"human_decision": HumanDecision(approved=approve, notes=notes)})
+                g.invoke(None, config=_config(thread))
+    except RunLockedError as e:
+        typer.echo(f"[BUSY] {e}", err=True)
+        raise typer.Exit(75)
     except LLMError as e:
-        typer.echo(f"[FAILED] LLM error at node '{get_last_node()}': {e}", err=True)
+        failure = _record_failure(out, e)
+        typer.echo(f"[FAILED] LLM error at node '{failure.node}': {e}", err=True)
         raise typer.Exit(1)
     except Exception as e:
-        typer.echo(f"[FAILED] resume error at node '{get_last_node()}': {type(e).__name__}: {e}", err=True)
+        failure = _record_failure(out, e)
+        typer.echo(f"[FAILED] resume error at node '{failure.node}': {type(e).__name__}: {e}", err=True)
         raise typer.Exit(1)
     finally:
         tracer.flush()
         reset_current(tok)
+    clear_failure_report(out)
     _dump_state_summary(out, thread)
     if approve:
         typer.echo(f"done. tex/md written to {out}")
@@ -366,36 +470,315 @@ def resume(
 def recover(
     out: Path = typer.Option(Path("runs/latest")),
     thread: str = typer.Option("default"),
+    no_interrupt: bool = typer.Option(
+        False, "--no-interrupt", help="沿用自动批准策略，不在 human_review 暂停"
+    ),
 ):
     """从最近 checkpoint 续跑，不注入 human_decision。
 
     用于 writer/coder/figure 等节点崩溃后的恢复。与 resume 的区别：
     resume 注入 human_decision 服务 human_review；recover 纯续跑。
     writer 子流程拆成 prep + section 循环后，section 崩溃不丢已完成节。
+
+    附录 A.4 死循环防护：recover 检测同一节点连续失败次数，超过阈值后停止。
     """
     _require_checkpoint(out)
     _require_trace_thread(out, thread)
+    try:
+        manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
+        no_interrupt = no_interrupt or bool(manifest.get("no_interrupt", False))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        pass
     clear_failed_node()
+    clear_failure_report(out)
     tracer = Tracer(thread_id=thread, out_dir=out, append_existing=True)
     tok = set_current(tracer)
+    # 连续失败计数只防止真正的死循环；间歇性 502 至少允许三次人工 recover。
+    fail_marker = out / ".recover_failed_node"
+    supervised = os.getenv("MATH_AGENT_SUPERVISED", "") == "1"
+    failure_state = {"node": "", "count": 0}
+    if fail_marker.exists() and not supervised:
+        try:
+            loaded = json.loads(fail_marker.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                failure_state = {"node": str(loaded.get("node", "")),
+                                 "count": int(loaded.get("count", 0))}
+        except (OSError, ValueError, json.JSONDecodeError):
+            # 兼容旧版本只写节点名的 marker：视为失败一次，而不是立即阻断。
+            failure_state = {"node": fail_marker.read_text(encoding="utf-8").strip(), "count": 1}
+    _RECOVER_FAIL_LIMIT = 3
+
+    def _record_recover_failure(node: str) -> None:
+        count = failure_state["count"] + 1 if failure_state["node"] == node else 1
+        fail_marker.write_text(json.dumps({"node": node, "count": count}, ensure_ascii=False),
+                               encoding="utf-8")
     try:
-        with _saver_cm(out) as saver:
-            g = build_graph(checkpointer=saver, interrupt_before=["human_review"])
+        with RunLock(out), _saver_cm(out) as saver:
+            g = build_graph(
+                checkpointer=saver,
+                interrupt_before=[] if no_interrupt else ["human_review"],
+            )
             snapshot = g.get_state(_config(thread))
             if snapshot is None or not snapshot.values:
                 raise ValueError(f"checkpoint has no state for thread={thread}")
-            g.invoke(None, config=_config(thread))
+            # 同一微节点已经连续失败三次才停止自动重跑。
+            current_node = ""
+            try:
+                current_node = snapshot.next[0] if snapshot.next else ""
+            except (IndexError, TypeError):
+                pass
+            if (not supervised and current_node and failure_state["node"] == current_node
+                    and failure_state["count"] >= _RECOVER_FAIL_LIMIT):
+                typer.echo(
+                    f"[BLOCKED] 节点 '{current_node}' 已连续 recover 失败 "
+                    f"{failure_state['count']} 次。\n"
+                    f"  可能是 prompt 过长或输出过大导致持续 timeout。\n"
+                    f"  建议：1) 检查该节点的 prompt/schema  2) 手动调整 .env 中的 timeout\n"
+                    f"  3) 确认问题后删除 {fail_marker} 再重试 recover。",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            auto_approve_key = "MATH_AGENT_AUTO_APPROVE_HUMAN_REVIEW"
+            previous_auto_approve = os.environ.get(auto_approve_key)
+            if no_interrupt:
+                # 不在任意中间 checkpoint 上调用 update_state。LangGraph 无法从一条
+                # 人工恢复分支可靠推断“最后执行节点”，这会把 next_node 错路由到旧节点。
+                # 自动批准只在 human_review 节点真正执行时生效，因此不改变恢复点。
+                os.environ[auto_approve_key] = "1"
+            try:
+                g.invoke(None, config=_config(thread))
+            finally:
+                if previous_auto_approve is None:
+                    os.environ.pop(auto_approve_key, None)
+                else:
+                    os.environ[auto_approve_key] = previous_auto_approve
+        # 成功则清除失败标记
+        fail_marker.unlink(missing_ok=True)
+    except RunLockedError as e:
+        typer.echo(f"[BUSY] {e}", err=True)
+        raise typer.Exit(75)
     except LLMError as e:
-        typer.echo(f"[FAILED] LLM error at node '{get_last_node()}': {e}", err=True)
+        failure = _record_failure(out, e)
+        failed = failure.node
+        if not supervised:
+            _record_recover_failure(failed)
+        typer.echo(f"[FAILED] LLM error at node '{failed}': {e}", err=True)
+        typer.echo(f"  若同一节点反复失败，检查 prompt/timeout 或手动干预。", err=True)
         raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except Exception as e:
-        typer.echo(f"[FAILED] recover error at node '{get_last_node()}': {type(e).__name__}: {e}", err=True)
+        failure = _record_failure(out, e)
+        failed = failure.node
+        if not supervised:
+            _record_recover_failure(failed)
+        typer.echo(f"[FAILED] recover error at node '{failed}': {type(e).__name__}: {e}", err=True)
         raise typer.Exit(1)
     finally:
         tracer.flush()
         reset_current(tok)
+    clear_failure_report(out)
     _dump_state_summary(out, thread)
     typer.echo(f"recovered. trace at {out / 'trace.json'}")
+
+
+def _supervisor_exit(result, out: Path, thread: str) -> None:
+    if result.status == "completed":
+        typer.echo(f"supervised run completed (thread={thread}); paper at {out / 'paper.md'}")
+        return
+    if result.status == "paused":
+        typer.echo(f"pipeline paused before human_review (thread={thread}); trace at {out / 'trace.json'}")
+        return
+    if result.status == "rejected":
+        typer.echo(f"pipeline rejected at human_review; no finalization was performed for {out}")
+        return
+    if result.status == "degraded":
+        typer.echo(
+            f"[DEGRADED] 流程已收口但存在警告；查看 {out / 'completion.json'}",
+            err=True,
+        )
+        raise typer.Exit(2)
+    typer.echo(
+        f"[BLOCKED] 自动恢复停止于节点 '{result.last_node}'：{result.message}\n"
+        f"  状态：{out / 'supervisor.json'}\n"
+        f"  失败：{out / 'failure.json'}",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+@app.command()
+def supervise(
+    problem: Path = typer.Option(..., exists=True, readable=True),
+    out: Path = typer.Option(Path("runs/latest")),
+    thread: str = typer.Option("default"),
+    no_interrupt: bool = typer.Option(False, "--no-interrupt", help="跳过 HITL，直接跑到底"),
+    template: str = typer.Option("default", help="LaTeX 模板：default | gmcm"),
+    school: str = typer.Option(""),
+    team_id: str = typer.Option(""),
+    members: str = typer.Option(""),
+    force: bool = typer.Option(False, "--force", help="清除旧 checkpoint 后启动新任务"),
+    same_node_limit: int = typer.Option(3, min=1, help="同一微节点连续失败上限"),
+    max_recoveries: int = typer.Option(20, min=1, help="整次任务自动恢复总上限"),
+    retry_delay: float = typer.Option(2.0, min=0.0, help="恢复退避基准秒数"),
+):
+    """以独立 worker 运行完整流程；崩溃或可恢复故障后自动从 checkpoint 续跑。"""
+    spec = _read_problem_spec(problem)
+    if template not in {"default", "gmcm"}:
+        raise typer.BadParameter("template 只能是 default 或 gmcm", param_hint="--template")
+    out = out.resolve()
+    _validate_existing_run_manifest(out, thread, spec, force)
+    args = ["--problem", str(problem.resolve()), "--out", str(out), "--thread", thread,
+            "--template", template]
+    if no_interrupt:
+        args.append("--no-interrupt")
+    if school:
+        args.extend(["--school", school])
+    if team_id:
+        args.extend(["--team-id", team_id])
+    if members:
+        args.extend(["--members", members])
+    if force:
+        args.append("--force")
+    try:
+        result = run_process_supervisor(
+            out=out,
+            thread=thread,
+            run_args=args,
+            initial_mode="run" if force else None,
+            policy=SupervisorPolicy(
+                same_node_limit=same_node_limit,
+                max_recoveries=max_recoveries,
+                base_delay=retry_delay,
+                auto_approve=no_interrupt,
+            ),
+        )
+    except RunLockedError as e:
+        typer.echo(f"[BUSY] {e}", err=True)
+        raise typer.Exit(75)
+    _supervisor_exit(result, out, thread)
+
+
+@app.command()
+def start(
+    problem: Path = typer.Option(..., exists=True, readable=True),
+    out: Path = typer.Option(Path("runs/latest")),
+    thread: str = typer.Option("default"),
+    no_interrupt: bool = typer.Option(False, "--no-interrupt"),
+    template: str = typer.Option("default"),
+    force: bool = typer.Option(False, "--force"),
+    same_node_limit: int = typer.Option(3, min=1),
+    max_recoveries: int = typer.Option(20, min=1),
+    retry_delay: float = typer.Option(2.0, min=0.0),
+):
+    """在后台启动受监管任务，适合 Codex CLI、Claude CLI 和短生命周期终端。"""
+    spec = _read_problem_spec(problem)
+    if template not in {"default", "gmcm"}:
+        raise typer.BadParameter("template 只能是 default 或 gmcm", param_hint="--template")
+    out = out.resolve()
+    _validate_existing_run_manifest(out, thread, spec, force)
+    args = [
+        "--problem", str(problem.resolve()), "--out", str(out), "--thread", thread,
+        "--template", template, "--same-node-limit", str(same_node_limit),
+        "--max-recoveries", str(max_recoveries), "--retry-delay", str(retry_delay),
+    ]
+    if no_interrupt:
+        args.append("--no-interrupt")
+    if force:
+        args.append("--force")
+    pid = start_detached_supervisor(out=out, supervise_args=args, cwd=Path.cwd())
+    typer.echo(f"Beacon supervisor 已在后台启动，PID={pid}")
+    typer.echo(f"状态：uv run math-agent status --out {out} --thread {thread}")
+    typer.echo(f"日志：{out / 'supervisor.log'}")
+
+
+@app.command()
+def status(
+    out: Path = typer.Option(Path("runs/latest")),
+    thread: str = typer.Option("default"),
+):
+    """读取 checkpoint、supervisor 和最终提交标记，不修改运行状态。"""
+    inspection = inspect_checkpoint(out, thread)
+    supervisor_state = None
+    completion = None
+    for path, target in ((out / "supervisor.json", "supervisor"),
+                         (out / "completion.json", "completion")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            payload = None
+        if target == "supervisor":
+            supervisor_state = (
+                reconcile_supervisor_state(payload) if isinstance(payload, dict) else payload
+            )
+        else:
+            completion = payload
+    verified_completion = load_verified_completion(out)
+    if (
+        supervisor_state
+        and verified_completion is not None
+        and supervisor_state.get("status") != verified_completion.status
+    ):
+        supervisor_state = dict(supervisor_state)
+        supervisor_state["status"] = "stale"
+        supervisor_state["stale_reason"] = (
+            f"superseded_by_verified_completion:{verified_completion.status}"
+        )
+        supervisor_state["effective_status"] = verified_completion.status
+    typer.echo(f"checkpoint: {'yes' if inspection.checkpoint_exists else 'no'}")
+    typer.echo(f"next_node: {inspection.next_node or '-'}")
+    typer.echo(f"final_status: {inspection.final_status or '-'}")
+    if supervisor_state:
+        typer.echo(f"supervisor_status: {supervisor_state.get('status', '-')}")
+        typer.echo(f"heartbeat_at: {supervisor_state.get('heartbeat_at', '-')}")
+        typer.echo(f"worker_pid: {supervisor_state.get('worker_pid', '-')}")
+        if supervisor_state.get("stale_reason"):
+            typer.echo(f"stale_reason: {supervisor_state['stale_reason']}")
+        if supervisor_state.get("effective_status"):
+            typer.echo(f"effective_status: {supervisor_state['effective_status']}")
+    if completion:
+        typer.echo(f"completion: {completion.get('status', '-')}")
+
+
+@app.command("supervise-resume")
+def supervise_resume(
+    out: Path = typer.Option(Path("runs/latest")),
+    thread: str = typer.Option("default"),
+    approve: bool | None = typer.Option(None, "--approve/--no-approve"),
+    notes: str = typer.Option(""),
+    same_node_limit: int = typer.Option(3, min=1),
+    max_recoveries: int = typer.Option(20, min=1),
+    retry_delay: float = typer.Option(2.0, min=0.0),
+):
+    """提交人审决定，并监管 LaTeX/finalizer 直到形成明确终态。"""
+    if approve is None:
+        raise typer.BadParameter(
+            "必须显式传入 --approve 或 --no-approve", param_hint="--approve/--no-approve",
+        )
+    _require_checkpoint(out)
+    _require_trace_thread(out, thread)
+    out = out.resolve()
+    args = ["--out", str(out), "--thread", thread,
+            "--approve" if approve else "--no-approve"]
+    if notes:
+        args.extend(["--notes", notes])
+    try:
+        result = run_process_supervisor(
+            out=out,
+            thread=thread,
+            resume_args=args,
+            initial_mode="resume",
+            policy=SupervisorPolicy(
+                same_node_limit=same_node_limit,
+                max_recoveries=max_recoveries,
+                base_delay=retry_delay,
+                auto_approve=bool(approve),
+            ),
+        )
+    except RunLockedError as e:
+        typer.echo(f"[BUSY] {e}", err=True)
+        raise typer.Exit(75)
+    _supervisor_exit(result, out, thread)
 
 
 @app.command()

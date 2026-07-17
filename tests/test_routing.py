@@ -132,8 +132,21 @@ def test_consistency_retries_when_approved_but_low_score():
 
 def test_consistency_advances_with_warning_at_cap():
     from math_agent.config import MAX_CODE_VERIFY_ITERATIONS
+    from math_agent.state import CodeArtifact
     s = _state_with_consistency_report(approved=False, score=4, iteration=MAX_CODE_VERIFY_ITERATIONS)
+    s.code_artifacts.append(CodeArtifact(
+        purpose="primary", code="print(1)", success=True,
+        evidence_role="primary", batch=1,
+    ))
     assert after_model_code_consistency(s) == "advance_with_warning"
+
+
+def test_consistency_never_advances_without_primary_even_at_cap():
+    from math_agent.config import MAX_CODE_VERIFY_ITERATIONS
+    s = _state_with_consistency_report(
+        approved=False, score=0, iteration=MAX_CODE_VERIFY_ITERATIONS,
+    )
+    assert after_model_code_consistency(s) == "retry_coder"
 
 
 def test_consistency_retries_coder_when_no_reports():

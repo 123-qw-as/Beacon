@@ -14,4 +14,4 @@ npm start
 
 然后访问 `http://127.0.0.1:5173`。直接打开 `index.html` 只能查看静态页面，无法调用运行、恢复和产物接口。
 
-题面导入支持 JSON、Markdown 和 TXT。PDF 需要先转换为文本；当前前端不会上传或解析 PDF。
+题面导入支持 JSON、Markdown、TXT、PDF 和 Word。数据附件支持 Excel、CSV、PDF、Word、TXT 和 Markdown，可多选上传；服务端会保存附件并生成摘要，运行时把真实文件路径写入题目配置，供后端审计读取。

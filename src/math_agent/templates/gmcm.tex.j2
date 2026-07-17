@@ -1,5 +1,13 @@
 \documentclass[bwprint]{gmcmthesis}
 \usepackage{amsmath}
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  columns=fullflexible,
+  breaklines=true,
+  breakatwhitespace=false,
+  keepspaces=true,
+  showstringspaces=false
+}
 \numberwithin{figure}{section}
 \renewcommand{\thefigure}{\arabic{section}-\arabic{figure}}
 % 覆盖 cls 默认的 `4 . 1` 风格 (thinspace.thinspace) → 改为标准 `4.1`
@@ -59,9 +67,11 @@
 {{ paper.sensitivity }}
 
 {% for r in sensitivity_runs %}
+{% if r.interpretation %}
 \subsubsection*{ {{- r.parameter -}} }
 {{ r.interpretation }}
 
+{% endif %}
 {% endfor %}
 
 \section{模型的评价}
@@ -85,9 +95,9 @@
 
 {% if art.curated_stdout %}
 \subsubsection*{关键输出摘要}
-\begin{verbatim}
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize,breaklines=true,breakatwhitespace=false,columns=fullflexible]
 {{ art.curated_stdout }}
-\end{verbatim}
+\end{lstlisting}
 {% endif %}
 
 {% endfor %}

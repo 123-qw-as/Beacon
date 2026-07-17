@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from math_agent.tracing import Tracer
 
@@ -78,6 +79,21 @@ def test_wrapped_node_preserves_failed_node_name():
         wrapped(None)
     assert get_last_node() == "coder"
     clear_failed_node()
+
+
+def test_wrapped_node_attaches_name_across_thread_boundary():
+    from concurrent.futures import ThreadPoolExecutor
+    from math_agent.graph import _wrap
+
+    wrapped = _wrap(
+        lambda _state: (_ for _ in ()).throw(RuntimeError("boom")),
+        "modeler",
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(wrapped, None)
+        with pytest.raises(RuntimeError) as caught:
+            future.result()
+    assert getattr(caught.value, "_math_agent_failed_node") == "modeler"
 
 
 def test_tracer_ignores_valid_json_with_wrong_shape(workdir):

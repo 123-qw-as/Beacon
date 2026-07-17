@@ -18,7 +18,7 @@ export function getOnboardingStatus() {
   const apiKeyMatch = content.match(/^OPENAI_API_KEY\s*=\s*(.+)$/m);
   const apiKey = apiKeyMatch ? apiKeyMatch[1].trim() : "";
 
-  if (!apiKey || apiKey === "123456") {
+  if (!apiKey) {
     return { needed: true, reason: "no_api_key" };
   }
 

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from math_agent.tools.runner import run_python, RunResult
 
 
@@ -111,6 +113,161 @@ def test_extract_numeric_results_ignores_malformed():
     assert results == {} or results.get("test") == {}
 
 
+def test_validate_numeric_results_rejects_exit_zero_error_marker():
+    """进程退出码为 0 也不能掩盖脚本自行打印的数据加载失败。"""
+    from math_agent.tools.runner import validate_numeric_results
+
+    valid, reason, _ = validate_numeric_results(
+        "Data loading failed: '纬度'\n"
+        "RESULT: baseline=ours total_cost=0 service_rate=0",
+        require_result=True,
+    )
+
+    assert valid is False
+    assert "Data loading failed" in reason
+
+
+def test_validate_numeric_results_rejects_nonfinite_value_outside_result_line():
+    from math_agent.tools.runner import validate_numeric_results
+
+    valid, reason, _ = validate_numeric_results(
+        "预测重量均值=nan\n"
+        "RESULT: baseline=simple_pred total_cost=300 service_rate=1",
+        require_result=True,
+    )
+
+    assert valid is False
+    assert "非有限" in reason
+
+
+def test_validate_numeric_results_rejects_impossible_entity_count():
+    """实体数量不能远大于输入数据能够支持的规模。"""
+    from math_agent.tools.runner import validate_numeric_results
+
+    valid, reason, _ = validate_numeric_results(
+        "RESULT: baseline=ours total_cost=4812127.99 veh_count=19011 service_rate=0.92",
+        require_result=True,
+        max_entity_count=2170,
+    )
+
+    assert valid is False
+    assert "veh_count" in reason
+
+
+def test_validate_numeric_results_accepts_plausible_metrics():
+    from math_agent.tools.runner import validate_numeric_results
+
+    valid, reason, parsed = validate_numeric_results(
+        "RESULT: baseline=ours total_cost=2470.93 vehicles=7 service_rate=1.0 total_carbon=96.41",
+        require_result=True,
+        max_entity_count=2170,
+        expected_identifier="ours",
+    )
+
+    assert valid is True, reason
+    assert parsed["ours"]["vehicles"] == 7
+
+
+@pytest.mark.parametrize(
+    ("metrics", "needle"),
+    [
+        ("delivery_time=-1 total_cost=20 vehicles=1 service_rate=0.9", "delivery_time"),
+        ("delivery_time=1 total_cost=20 vehicles=1 service_rate=1.01", "service_rate"),
+        ("delivery_time=1 total_cost=20 vehicles=2171 service_rate=0.9", "vehicles"),
+    ],
+)
+def test_validate_numeric_results_rejects_domain_bounds(metrics, needle):
+    from math_agent.tools.runner import validate_numeric_results
+
+    valid, reason, _ = validate_numeric_results(
+        f"RESULT: baseline=ours {metrics}",
+        require_result=True,
+        max_entity_count=2170,
+    )
+
+    assert valid is False
+    assert needle in reason
+
+
+def test_validate_numeric_results_requires_enough_primary_metrics():
+    from math_agent.tools.runner import validate_numeric_results
+
+    valid, reason, _ = validate_numeric_results(
+        "RESULT: baseline=ours total_cost=46750 service_rate=0.88",
+        require_result=True,
+        min_metrics_per_result=4,
+    )
+
+    assert valid is False
+    assert "至少需要 4" in reason
+
+
+def test_validate_code_data_usage_rejects_hardcoded_results():
+    from math_agent.tools.runner import validate_code_data_usage
+
+    valid, reason = validate_code_data_usage(
+        "total_cost = 46750\nprint(total_cost)", ["订单.xlsx", "客户坐标.xlsx"],
+    )
+
+    assert valid is False
+    assert "硬编码" in reason
+
+
+def test_validate_code_data_usage_accepts_real_attachment_read():
+    from math_agent.tools.runner import validate_code_data_usage
+
+    valid, reason = validate_code_data_usage(
+        "import pandas as pd\ndf = pd.read_excel('订单.xlsx')", ["订单.xlsx"],
+    )
+
+    assert valid is True, reason
+
+
+def test_validate_code_data_usage_rejects_read_then_constant_result():
+    from math_agent.tools.runner import validate_code_data_usage
+
+    valid, reason = validate_code_data_usage(
+        "open('orders.xlsx', 'rb').read(1)\n"
+        "print('RESULT: baseline=ours total_cost=46750 vehicles=18 "
+        "service_rate=0.88 total_carbon=850')",
+        ["orders.xlsx"],
+    )
+
+    assert valid is False
+    assert "硬编码" in reason
+
+
+def test_run_python_audits_actual_attachment_reads(workdir):
+    attachment = workdir / "orders.xlsx"
+    attachment.write_bytes(b"fixture")
+
+    read = run_python(
+        f"open({str(attachment)!r}, 'rb').read(1)\nprint('ok')",
+        workdir=workdir / "read",
+        expected_input_paths=[attachment],
+    )
+    ignored = run_python(
+        "print('ok')",
+        workdir=workdir / "ignored",
+        expected_input_paths=[attachment],
+    )
+
+    assert str(attachment).casefold() in read.read_paths
+    assert ignored.read_paths == []
+
+
+def test_validate_code_data_usage_accepts_dynamic_directory_discovery():
+    from math_agent.tools.runner import validate_code_data_usage
+
+    valid, reason = validate_code_data_usage(
+        "from pathlib import Path\nimport pandas as pd\n"
+        "files = list(Path('data').glob('*.xlsx'))\ndf = pd.read_excel(files[0])",
+        ["订单.xlsx"],
+    )
+
+    assert valid is True, reason
+
+
 def test_auto_fix_imports_handles_qualified_pyplot_after_matplotlib_import():
     from math_agent.tools.runner import _auto_fix_imports
     code = "import matplotlib\nmatplotlib.pyplot.plot([1, 2])"
@@ -118,15 +275,76 @@ def test_auto_fix_imports_handles_qualified_pyplot_after_matplotlib_import():
     assert "import matplotlib.pyplot" in fixed.splitlines()[:3]
 
 
-def test_runner_decodes_timeout_output_bytes(mocker, workdir):
-    import subprocess
-    mocker.patch(
-        "math_agent.tools.runner.subprocess.run",
-        side_effect=subprocess.TimeoutExpired("python", 1, output=b"partial\xff"),
+def test_normalize_common_import_mistakes_repairs_rcparams():
+    from math_agent.tools.runner import _normalize_common_import_mistakes
+
+    fixed = _normalize_common_import_mistakes(
+        "import matplotlib.rcparams as rc\nrc['font.size'] = 10\n"
     )
-    res = run_python("print('x')", workdir=workdir, timeout=1)
+
+    assert "from matplotlib import rcParams as rc" in fixed
+    assert "matplotlib.rcparams" not in fixed
+
+
+def test_normalize_escaped_source_repairs_double_escaped_script():
+    from math_agent.tools.runner import _normalize_escaped_source
+    code = "import math\\nprint(math.sqrt(4))\\n"
+    fixed = _normalize_escaped_source(code)
+    assert "print(math.sqrt(4))" in fixed
+    assert "\\n" not in fixed
+
+
+def test_run_python_executes_double_escaped_script(workdir):
+    code = "value = 1 + 1\\nprint(value)\\n"
+    res = run_python(code, workdir=workdir)
+    assert res.success, res.stderr
+    assert "2" in res.stdout
+
+
+def test_runner_decodes_timeout_output_bytes(mocker, workdir):
+    code = (
+        "import sys, time\n"
+        "sys.stdout.buffer.write(b'partial\\xff')\n"
+        "sys.stdout.buffer.flush()\n"
+        "time.sleep(30)\n"
+    )
+    res = run_python(code, workdir=workdir, timeout=1)
     assert isinstance(res.stdout, str)
     assert res.stdout.startswith("partial")
+
+
+def test_runner_timeout_kills_descendant_process_tree(workdir):
+    import psutil
+    import time
+
+    code = (
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "print(child.pid, flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    res = run_python(code, workdir=workdir, timeout=1)
+    child_pid = int(res.stdout.strip().splitlines()[0])
+    for _ in range(20):
+        if not psutil.pid_exists(child_pid):
+            break
+        time.sleep(0.05)
+
+    assert res.error_kind == "timeout"
+    assert not psutil.pid_exists(child_pid)
+
+
+def test_runner_enforces_process_tree_memory_limit(workdir):
+    res = run_python(
+        "import time\nx = bytearray(256 * 1024 * 1024)\ntime.sleep(30)\n",
+        workdir=workdir,
+        timeout=10,
+        memory_limit_mb=128,
+    )
+
+    assert res.success is False
+    assert res.error_kind == "resource"
+    assert "memory limit exceeded" in res.stderr
 
 
 # ── Agg 注入 + plt.show 剥离 测试 ──

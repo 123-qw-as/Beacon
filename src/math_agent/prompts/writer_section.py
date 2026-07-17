@@ -16,6 +16,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel
 
 from math_agent.state import CriticIssue, MathModelingState
+from math_agent.tools.runner import extract_valid_result_lines, infer_entity_upper_bound
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +159,75 @@ _RESULT_NUM_RE = _re.compile(
     _re.MULTILINE,
 )
 
+_MAX_WRITER_MODELS = 2
+_MAX_WRITER_EQUATIONS = 36
+_MAX_WRITER_VARIABLES = 20
+_MAX_WRITER_DERIVATIONS = 6
+_MAX_WRITER_CODE_ARTIFACTS = 3
+
+
+def _compact_text(text: str, max_chars: int) -> str:
+    text = text or ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n……（已截断）"
+
+
+def _compact_model_versions(state: MathModelingState):
+    compact = []
+    for m in state.model_versions[-_MAX_WRITER_MODELS:]:
+        derivations = [
+            d.model_copy(update={
+                "title": _compact_text(d.title, 80),
+                "motivation": _compact_text(d.motivation, 160),
+                "statement": _compact_text(d.statement, 160),
+                "result": _compact_text(d.result, 160),
+            })
+            for d in m.derivation_steps[:_MAX_WRITER_DERIVATIONS]
+        ]
+        compact.append(m.model_copy(update={
+            "description": _compact_text(m.description, 500),
+            "equations": m.equations[:_MAX_WRITER_EQUATIONS],
+            "variables": dict(list(m.variables.items())[:_MAX_WRITER_VARIABLES]),
+            "notes": _compact_text(m.notes, 240),
+            "figure_purposes": m.figure_purposes[:6],
+            "derivation_steps": derivations,
+            "derivation_notes": _compact_text(m.derivation_notes, 240),
+            "question_coverage": m.question_coverage[:8],
+            "objective_mapping": m.objective_mapping[:8],
+            "constraint_mapping": m.constraint_mapping[:12],
+            "validation_mapping": m.validation_mapping[:8],
+        }))
+    return compact
+
+
+def _compact_code_artifacts(state: MathModelingState):
+    compact = []
+    upper_bound = infer_entity_upper_bound(state.data_files)
+    for a in state.latest_code_artifacts():
+        if not a.success or a.evidence_role not in {"primary", "baseline"}:
+            continue
+        expected = a.category.split(":", 1)[1] if a.category.startswith("baseline:") else None
+        result_lines = extract_valid_result_lines(
+            a.stdout,
+            stderr=a.stderr,
+            expected_identifier=expected,
+            max_entity_count=upper_bound,
+        )
+        if not result_lines:
+            continue
+        code_limit = 14000 if a.evidence_role == "primary" else 1000
+        compact.append(a.model_copy(update={
+            "purpose": _compact_text(a.purpose, 120),
+            "code": _compact_text(a.code, code_limit),
+            "stdout": _compact_text("\n".join(result_lines), 800),
+            "stderr": "",
+            "artifact_paths": a.artifact_paths[:3],
+        }))
+        if len(compact) >= _MAX_WRITER_CODE_ARTIFACTS:
+            break
+    return compact
+
 
 def _extract_available_numbers(state: MathModelingState) -> str:
     """从 code_artifacts.stdout 和 sensitivity_runs 提取可用数值清单。
@@ -165,14 +235,19 @@ def _extract_available_numbers(state: MathModelingState) -> str:
     让 writer "只能用这些数值"，比 IRON RULE 的禁令更有效。
     """
     lines: list[str] = []
+    upper_bound = infer_entity_upper_bound(state.data_files)
     for a in state.latest_code_artifacts():
-        if not a.success or not a.stdout:
+        if (not a.success or not a.stdout
+                or a.evidence_role not in {"primary", "baseline"}):
             continue
-        # 提取 RESULT: 行
-        for m in _RESULT_NUM_RE.finditer(a.stdout):
-            line = m.group(0).strip()
-            if line:
-                lines.append(f"  [{a.purpose}] {line}")
+        expected = a.category.split(":", 1)[1] if a.category.startswith("baseline:") else None
+        for line in extract_valid_result_lines(
+            a.stdout,
+            stderr=a.stderr,
+            expected_identifier=expected,
+            max_entity_count=upper_bound,
+        ):
+            lines.append(f"  [{a.purpose}] {line}")
     for r in state.sensitivity_runs:
         lines.append(f"  [sensitivity] {r.parameter}={r.values} → {r.metric}={r.results}")
     if not lines:
@@ -189,7 +264,7 @@ def build_outline_prompt(state: MathModelingState, *, retrieved_context: str = "
     tmpl = _env.get_template("writer_outline.md.j2")
     rendered = tmpl.render(
         problem=state.problem,
-        model_versions=state.model_versions,
+        model_versions=_compact_model_versions(state),
         problem_blueprint=state.problem_blueprint,
     )
     if retrieved_context:
@@ -212,13 +287,15 @@ def build_section_prompt(
     references_list: list[Reference] 或 None，仅 references 分组需要（Plan D Phase 5）。
     """
     group = _group_by_name(group_name)
+    compact_models = _compact_model_versions(state)
+    compact_artifacts = _compact_code_artifacts(state)
     # 标准视图 dict：与原 writer_prompt 一致的全量素材，由各模板按需取用。
-    latest_model = state.latest_model()
+    latest_model = compact_models[-1] if compact_models else None
     view = {
         "problem": state.problem,
         "assumptions": state.assumptions,
-        "model_versions": state.model_versions,
-        "code_artifacts": state.code_artifacts,
+        "model_versions": compact_models,
+        "code_artifacts": compact_artifacts,
         "sensitivity_runs": state.sensitivity_runs,
         "figures": state.figures,
         "prior_critic": prior_critic if prior_critic is not None else state.latest_critic("paper"),

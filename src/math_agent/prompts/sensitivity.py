@@ -32,8 +32,12 @@ CODE_SYSTEM = (
     "`import numpy as np; import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt`，"
     "不得依赖外部已导入的变量或隐式导入。缺 import 会直接导致 NameError；"
     "用 print 输出 `RESULT: parameter=<名称字面量> values=<list> results=<list>` 行（每个 run 一行），"
-    "**parameter 必须是字符串字面量（如 `parameter=alpha`），不要写 `parameter={alpha}` 这种把变量值代入的写法**，"
+    "**parameter 必须逐字使用计划中的完整名称（包括空格和括号）；也可只使用括号内英文别名。**"
+    "不要写 `parameter={alpha}` 这种把变量值代入的写法。"
     "values/results 用 Python 列表的 repr（例如 `[0.1, 0.2, 0.3]`），方便正则解析。\n"
+    "不得用手工构造的线性/二次曲线冒充重求解结果；每个扰动值都必须重新运行同一目标函数与约束。"
+    "不得捕获数据读取或求解异常后继续返回 0；发生异常必须 raise，使进程以非零状态退出。"
+    "完整脚本应复用函数并控制在 4500 字符左右，避免重复展开同一套求解逻辑。"
     # 图表质量（参考 nature-figure 准则，与 coder 一致）：
     "绘图质量要求："
     "(1) 每张图只论证一个参数的敏感性，title 写 `Sensitivity of <metric> to <parameter>`；"
@@ -45,10 +49,11 @@ CODE_SYSTEM = (
 
 def build_code_prompt(model, plan_runs, prev_failure: str | None = None,
                       prev_error_kind: str = "",
-                      data_dir=None, data_files=None):
+                      data_dir=None, data_files=None, previous_code: str = "",
+                      main_code: str = "", canonical_metrics: dict | None = None):
     """构造敏感性扫参代码 prompt。
 
-    prev_error_kind: RunResult.error_kind，∈ {"", "timeout", "runtime"}
+    prev_error_kind: RunResult.error_kind，∈ {"", "timeout", "runtime", "output_validation"}
       timeout → 让 LLM 缩规模（值列表变短、MC 次数变少）而不是修 bug
       runtime → 喂 stderr 让它修
     """
@@ -67,17 +72,34 @@ def build_code_prompt(model, plan_runs, prev_failure: str | None = None,
             )
         else:
             fb = (
-                f"\n# 上次运行失败（runtime）\n"
-                f"stderr 节选：\n{prev_failure[:1000]}\n请修正后重试。\n"
+                f"\n# 上次运行或输出校验失败（{prev_error_kind or 'runtime'}）\n"
+                f"stderr 节选（输出校验失败时为校验信息）：\n{prev_failure[:1000]}\n"
+                "请修正后重试；不得吞掉异常或伪造 RESULT。\n"
             )
     data_hint = ""
     if data_dir and data_files:
         from math_agent.prompts._data_hint import build_data_hint
         data_hint = build_data_hint(data_dir, data_files)
+    repair = ""
+    if previous_code:
+        repair = (
+            "\n# 上一版扫参脚本（只做定向修复）\n"
+            f"```python\n{previous_code[:24000]}\n```\n"
+            "保留正确的数据读取、重求解和绘图逻辑，只修复 stderr 指向的问题；不要从零重写。\n"
+        )
+    canonical = ""
+    if main_code:
+        canonical = (
+            "\n# 正式主方案代码与基准指标（必须复用同一目标函数和约束）\n"
+            f"基准指标：{canonical_metrics or {}}\n"
+            f"```python\n{main_code[:16000]}\n```\n"
+            "每条敏感性曲线的中心参数值必须复现上述对应基准指标（允许数值算法小误差）；"
+            "不得另写一套口径、缩放单位或手工校准曲线。\n"
+        )
     return (
         f"# 最终模型\n{model.description}\n方程：\n{chr(10).join(model.equations)}\n\n"
-        f"# 敏感性分析计划\n{desc}\n{data_hint}{fb}\n"
-        f"请输出 JSON：{{\"code\": str}}。"
+        f"# 敏感性分析计划\n{desc}\n{data_hint}{canonical}{fb}{repair}\n"
+        f"请只输出完整 Python 源码，不要 JSON、解释文字或 Markdown 围栏。"
     )
 
 

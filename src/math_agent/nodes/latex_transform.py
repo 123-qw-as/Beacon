@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from math_agent.nodes.rendering import _latex_plain_text
+from math_agent.nodes.rendering import _latex_plain_text, _normalize_escaped_layout_text
 
 
 # ============================================================
@@ -113,6 +113,9 @@ def _wrap_unicode_math(s: str) -> str:
     """
     if not s:
         return s
+    # Some model prose uses Unicode superscript five (for scientific
+    # notation). XeLaTeX's selected CJK font has no glyph for it.
+    s = s.replace("⁵", "$^5$")
     sub_re = re.compile(r"([_^](?:\{[^}]+\}|[A-Za-z0-9]+))+")
 
     def _process(seg: str) -> str:
@@ -274,21 +277,34 @@ _NAKED_SUB_RE = re.compile(
     r")"
     r"(?![\w./])"
 )
+_SET_BRACE_RE = re.compile(r"\\\{([^{}\n]*?)(?<!\\)\}")
+
+
+def _expand_unicode_math(content: str) -> str:
+    """把 content 中的 Unicode 数学符号展开为 LaTeX 命令。"""
+    for ch, cmd in _UNICODE_MATH_MAP.items():
+        if ch in content:
+            content = content.replace(ch, cmd)
+    return content
+
+
+def _math_match_sub(m: re.Match) -> str:
+    """re.sub 回调：取 group(1)，展开 Unicode 数学符号，包成 $...$。"""
+    return f"${_expand_unicode_math(m.group(1))}$"
 
 
 def _md_inline_code_to_math(s: str) -> str:
     """把 markdown 反引号 inline `code` 转成 `$code$`。"""
     if not s:
         return s
+    return _BACKTICK_RE.sub(_math_match_sub, s)
 
-    def _sub(m: re.Match) -> str:
-        content = m.group(1)
-        for ch, cmd in _UNICODE_MATH_MAP.items():
-            if ch in content:
-                content = content.replace(ch, cmd)
-        return f"${content}$"
 
-    return _BACKTICK_RE.sub(_sub, s)
+def _normalize_set_braces(s: str) -> str:
+    r"""把 V\{1}、\{i,j} 这类半转义集合花括号补成 \{...\}。"""
+    if not s or r"\{" not in s:
+        return s
+    return _SET_BRACE_RE.sub(r"\\{\1\\}", s)
 
 
 def _wrap_naked_subscripts(s: str) -> str:
@@ -296,43 +312,19 @@ def _wrap_naked_subscripts(s: str) -> str:
     if not s:
         return s
 
-    def _sub(m: re.Match) -> str:
-        content = m.group(1)
-        for ch, cmd in _UNICODE_MATH_MAP.items():
-            if ch in content:
-                content = content.replace(ch, cmd)
-        return f"${content}$"
-
     def _process_text(t: str) -> str:
         segs = split_text_math(t)
         for i, (text, math) in enumerate(segs):
-            segs[i] = (_NAKED_SUB_RE.sub(_sub, text), math)
+            segs[i] = (_NAKED_SUB_RE.sub(_math_match_sub, text), math)
         return "".join(t + (m or "") for t, m in segs)
 
+    # split_with_display_math 已做两层切分：text 段都是纯文本（不含 display math），
+    # math 要么是 inline $...$ 要么是 display 块（\[, \(, \begin{equation}）。
     segs = split_with_display_math(s)
-    for i, (text, math) in enumerate(segs):
-        if math is None:
-            segs[i] = (_process_text(text), None)
-        elif math.startswith("\\[") or math.startswith("\\(") or math.startswith("\\begin{equation"):
-            # display math 块：text 部分需要处理（来自 split_with_display_math 的文本段）
-            pass  # text 已经是文本段，math 是 display 块，不动
-        else:
-            segs[i] = (_process_text(text), math)
-    # Re-join: split_with_display_math 返回的 display math 在 math 位置，
-    # text 部分的 text 需要再按 $ 切处理
-    # 实际上 split_with_display_math 已经帮我们做了两层切分，
-    # 所以这里的 text 都是纯文本段（不含 display math），math 要么是 inline 要么是 display
     result_segs: list[str] = []
     for text, math in segs:
-        if math is None:
-            result_segs.append(_process_text(text))
-        elif math.startswith("\\[") or math.startswith("\\(") or math.startswith("\\begin{equation"):
-            # display math 块：text 需要处理
-            result_segs.append(_process_text(text))
-            result_segs.append(math)
-        else:
-            # inline math: text 需要处理，math 不动
-            result_segs.append(_process_text(text))
+        result_segs.append(_process_text(text))
+        if math is not None:
             result_segs.append(math)
     return "".join(result_segs)
 
@@ -376,6 +368,37 @@ def _md_bullets_to_latex(s: str) -> str:
 
 def _md_table_to_latex(s: str) -> str:
     """markdown pipe-table → LaTeX tabular。"""
+    def _split_row(line: str) -> list[str]:
+        raw = line.strip()
+        if raw.startswith("|"):
+            raw = raw[1:]
+        if raw.endswith("|"):
+            raw = raw[:-1]
+        cells: list[str] = []
+        buf: list[str] = []
+        in_math = False
+        escape = False
+        for ch in raw:
+            if escape:
+                buf.append(ch)
+                escape = False
+                continue
+            if ch == "\\":
+                buf.append(ch)
+                escape = True
+                continue
+            if ch == "$":
+                in_math = not in_math
+                buf.append(ch)
+                continue
+            if ch == "|" and not in_math:
+                cells.append("".join(buf).strip())
+                buf = []
+                continue
+            buf.append(ch)
+        cells.append("".join(buf).strip())
+        return cells
+
     def _escape_cell_amps(cell: str) -> str:
         r"""转义 cell 里的裸 &，但跳过 $...$ math 模内的和已转义的 \&。"""
         segs = split_text_math(cell)
@@ -393,10 +416,10 @@ def _md_table_to_latex(s: str) -> str:
         if line.lstrip().startswith("|") and i + 1 < len(lines):
             sep = lines[i + 1].strip()
             if sep.startswith("|") and set(sep) <= set("|-: "):
-                header_cells = [c.strip() for c in line.strip().strip("|").split("|")]
+                header_cells = _split_row(line)
                 header_cells = [_escape_cell_amps(c) for c in header_cells]
                 ncols = len(header_cells)
-                sep_cells = [c.strip() for c in sep.strip().strip("|").split("|")]
+                sep_cells = _split_row(sep)
                 has_align_colons = any(":" in sc for sc in sep_cells)
                 if has_align_colons:
                     col_spec = "".join(
@@ -414,7 +437,7 @@ def _md_table_to_latex(s: str) -> str:
                        r"\midrule"]
                 j = i + 2
                 while j < len(lines) and lines[j].lstrip().startswith("|"):
-                    cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
+                    cells = _split_row(lines[j])
                     cells = [_escape_cell_amps(c) for c in cells]
                     cells = (cells + [""] * ncols)[:ncols]
                     tbl.append(" & ".join(cells) + r" \\")
@@ -607,11 +630,13 @@ def _prepare_section(s: str) -> str:
     9. math 命令间距修复
     10. 残留特殊字符转义
     """
+    s = _normalize_escaped_layout_text(s) or ""
     s = _md_table_to_latex(s)
     s = _md_headings_to_latex(s)
     s = _md_bold_to_latex(s)
     s = _md_bullets_to_latex(s)
     s = _md_inline_code_to_math(s)
+    s = _normalize_set_braces(s)
     s = _wrap_naked_subscripts(s)
     s = _wrap_unicode_math(s)
     s = _promote_inline_equations(s)
@@ -623,6 +648,7 @@ def _prepare_section(s: str) -> str:
 def _prepare_inline_text(s: str) -> str:
     """处理标题/题注等单行参数，不生成 equation、列表或章节命令。"""
     s = _md_inline_code_to_math(s)
+    s = _normalize_set_braces(s)
     s = _wrap_naked_subscripts(s)
     s = _wrap_unicode_math(s)
     s = _pad_math_commands(s)

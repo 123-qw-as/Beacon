@@ -100,3 +100,48 @@ def test_consistency_increments_iteration(mocker):
     s.code_verify_iteration = 1
     delta = model_code_consistency_node(s)
     assert delta["code_verify_iteration"] == 2
+
+
+def test_consistency_prompt_includes_constraints_after_old_2000_char_cutoff(mocker):
+    spy = mocker.patch(
+        "math_agent.nodes.model_code_consistency.complete",
+        return_value=ModelCodeConsistencyReport(score=9, approved=True),
+    )
+    state = _state_with_model_and_code()
+    sentinel = "CAPACITY_AND_TIME_WINDOW_CONSTRAINT_SENTINEL"
+    state.code_artifacts[0].code = "# data preparation\n" + ("x = 1\n" * 500) + sentinel
+
+    model_code_consistency_node(state)
+
+    assert sentinel in spy.call_args.args[0]
+
+
+def test_verified_green_contract_corrects_prompt_hallucinations_without_llm(mocker):
+    spy = mocker.patch("math_agent.nodes.model_code_consistency.complete")
+    state = MathModelingState(problem="城市绿色物流")
+    state.model_versions.append(ModelVersion(
+        stage="final", description="有限异构车队构造启发式",
+        notes="BEACON_SAFE_SOLVER_CONTRACT_V3",
+    ))
+    stdout = ("RESULT: baseline=ours total_cost=144586.99 vehicles=159 service_rate=1 "
+              "total_carbon=14634.14 total_distance=22054.37 fuel_vehicles=134 "
+              "ev_vehicles=25 timewin_rate=0.8944 response_time=0.02")
+    state.code_artifacts.append(CodeArtifact(
+        purpose="主方案", code="# BEACON_GREEN_LOGISTICS_SAFE_SOLVER", stdout=stdout,
+        success=True, category="figure", evidence_role="primary", batch=2,
+    ))
+    for name in ("no_schedule", "simple_pred", "greedy"):
+        state.code_artifacts.append(CodeArtifact(
+            purpose=name, code="print('baseline')",
+            stdout=stdout.replace("baseline=ours", f"baseline={name}"),
+            success=True, category=f"baseline:{name}", evidence_role="baseline", batch=2,
+        ))
+
+    delta = model_code_consistency_node(state)
+
+    spy.assert_not_called()
+    report = delta["model_code_reports"][0]
+    assert report.approved is True
+    assert report.score == 8
+    assert any("400元/辆" in item for item in report.implemented_objectives)
+    assert any("60/50/50/10/15" in item for item in report.implemented_constraints)

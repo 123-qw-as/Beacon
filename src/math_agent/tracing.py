@@ -45,6 +45,11 @@ class Tracer:
     completion_tokens: int = 0
     per_model: dict = field(default_factory=dict)
     nodes: list = field(default_factory=list)
+    # §9.1 attempt 级追踪
+    llm_attempts: int = 0
+    llm_failures: int = 0
+    llm_timeouts: int = 0
+    attempt_records: list = field(default_factory=list)
 
     def __post_init__(self):
         self.out_dir = Path(self.out_dir)
@@ -66,6 +71,12 @@ class Tracer:
         if blob.get("thread_id") != self.thread_id:
             return
         self.llm_calls = _safe_int(blob.get("llm_calls", 0))
+        self.llm_attempts = _safe_int(blob.get("llm_attempts", 0))
+        self.llm_failures = _safe_int(blob.get("llm_failures", 0))
+        self.llm_timeouts = _safe_int(blob.get("llm_timeouts", 0))
+        raw_attempts = blob.get("llm_attempt_records", [])
+        if isinstance(raw_attempts, list):
+            self.attempt_records = [a for a in raw_attempts if isinstance(a, dict)]
         tokens = blob.get("tokens", {})
         if not isinstance(tokens, dict):
             tokens = {}
@@ -110,6 +121,30 @@ class Tracer:
         m["completion_tokens"] += completion_tokens
         m["latency_ms"] += latency_ms
 
+    # ---- §9.1 attempt 级追踪 ----
+    _pending_attempt: dict | None = None
+
+    def begin_attempt(self, *, model: str, profile: str, attempt: int) -> None:
+        self.llm_attempts += 1
+        self._pending_attempt = {
+            "model": model, "profile": profile, "attempt": attempt,
+            "status": "pending",
+        }
+
+    def end_attempt(self, *, model: str, status: str, latency_ms: int,
+                    error_kind: str = "") -> None:
+        if status in ("failure", "timeout"):
+            self.llm_failures += 1
+        if status == "timeout":
+            self.llm_timeouts += 1
+        rec = dict(self._pending_attempt or {"model": model, "attempt": 0})
+        rec["status"] = status
+        rec["latency_ms"] = latency_ms
+        if error_kind:
+            rec["error_kind"] = error_kind
+        self.attempt_records.append(rec)
+        self._pending_attempt = None
+
     @contextmanager
     def node(self, name: str):
         # 用 monotonic_ns 测 duration，避免 NTP 校时回拨导致负值。
@@ -126,6 +161,10 @@ class Tracer:
         out.write_text(json.dumps({
             "thread_id": self.thread_id,
             "llm_calls": self.llm_calls,
+            "llm_attempts": self.llm_attempts,
+            "llm_failures": self.llm_failures,
+            "llm_timeouts": self.llm_timeouts,
+            "llm_attempt_records": self.attempt_records,
             "tokens": {
                 "prompt": self.prompt_tokens,
                 "completion": self.completion_tokens,

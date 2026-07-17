@@ -25,13 +25,14 @@ from math_agent.state import DerivationStep
 _PAYLOADS = {
     WriterOutline: WriterOutline(),
     _AbstractProblemOut: _AbstractProblemOut(
-        abstract="a"*200, problem_restatement="x"*200, keywords="k"),
-    _AssumptionsNotationOut: _AssumptionsNotationOut(assumptions="x"*200, notation="x"*200),
-    _ModelOut: _ModelOut(model_section="x"*200),
-    _SolutionOut: _SolutionOut(solution="x"*200),
-    _SensitivityOut: _SensitivityOut(sensitivity="x"*200),
-    _ConclusionOut: _ConclusionOut(conclusion="x"*200),
-    _ReferencesOut: _ReferencesOut(references="-"),
+        abstract="a"*300, problem_restatement="x"*1600, keywords="keyword"),
+    _AssumptionsNotationOut: _AssumptionsNotationOut(
+        assumptions="x"*1600, notation="x"*600),
+    _ModelOut: _ModelOut(model_section="x"*4500),
+    _SolutionOut: _SolutionOut(solution="x"*2800),
+    _SensitivityOut: _SensitivityOut(sensitivity="x"*1800),
+    _ConclusionOut: _ConclusionOut(conclusion="x"*1600),
+    _ReferencesOut: _ReferencesOut(references="reference"*20),
 }
 
 
@@ -62,20 +63,41 @@ def _setup_upstream_mocks(mocker, workdir):
     mocker.patch("math_agent.nodes.model_critic.complete",
                  return_value=CriticReport(target="modeler", score=9, approved=True))
     mocker.patch("math_agent.nodes.coder.complete",
-                 return_value=CoderDraft(purpose="主结果", code="print('coder done')"))
+                 return_value=CoderDraft(
+                     purpose="主结果",
+                     code=(
+                         "for name, cost in [('ours', 100), ('no_schedule', 110), "
+                         "('simple_pred', 105), ('greedy', 120)]:\n"
+                         " print(f'RESULT: baseline={name} total_cost={cost} vehicles=1 '"
+                         "'service_rate=1 total_carbon=1')"
+                     ),
+                 ))
     # model_code_consistency 审查通过
     mocker.patch("math_agent.nodes.model_code_consistency.complete",
                  return_value=ModelCodeConsistencyReport(score=9, approved=True))
-    sens_plan = SensitivityPlan(runs=[{"parameter": "lambda", "values": [1,2,3,4,5], "metric": "y", "rationale": "r"}])
+    sens_plan = SensitivityPlan(runs=[{
+        "parameter": "speed_multiplier", "values": [0.8, 1.0, 1.2],
+        "metric": "total_cost", "rationale": "r",
+    }])
     sens_code = SensitivityCode(code=(
         "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-        "v=[1,2,3,4,5]; r=[x*2 for x in v]\n"
-        "plt.plot(v,r); plt.savefig('lambda.png')\n"
-        "print(f'RESULT: parameter=lambda values={v} results={r}')\n"
+        "v=[0.8,1.0,1.2]; r=[100,100,100]\n"
+        "plt.plot(v,r); plt.savefig('speed_multiplier.png')\n"
+        "print(f'RESULT: parameter=speed_multiplier values={v} results={r}')\n"
     ))
-    sens_interp = Interpretations(interpretations=["lambda 越大 y 线性增长，敏感度中等。"])
+    sens_interp = Interpretations(interpretations=["速度扰动下总成本保持稳定。"])
+
+    def _sensitivity_complete(prompt, *, schema, **kw):
+        if schema is SensitivityPlan:
+            return sens_plan
+        if schema is SensitivityCode:
+            return sens_code
+        if schema is Interpretations:
+            return sens_interp
+        raise AssertionError(f"unexpected sensitivity schema: {schema}")
+
     mocker.patch("math_agent.nodes.sensitivity.complete",
-                 side_effect=[sens_plan, sens_code, sens_interp])
+                 side_effect=_sensitivity_complete)
     fc = FigureCriticOut(score=9, approved=True)
     fa = FigureAnalysisOut(analysis="趋势单调，敏感度中等。")
     mocker.patch("math_agent.nodes.figure_pipeline.complete",
@@ -146,4 +168,4 @@ def test_writer_section_crash_then_recover(mocker, workdir):
     paper = state.values.get("paper")
     assert paper is not None
     assert paper.abstract.startswith("a")
-    assert paper.references == "-"
+    assert paper.references.startswith("reference")

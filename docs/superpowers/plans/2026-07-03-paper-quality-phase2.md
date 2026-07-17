@@ -1,5 +1,7 @@
 # Paper Quality Improvement — Phase 2 Implementation Plan
 
+> **历史方案记录（非现行事实源）**：路径、状态、命令和待办保留当时上下文；当前实现与限制见 [`../../README.md`](../../README.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add baseline comparison runs (3 control experiments) + numeric result extraction + comparison table generation — so papers contain real quantitative comparisons instead of LLM-improvised prose.

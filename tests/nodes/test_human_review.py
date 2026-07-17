@@ -13,3 +13,10 @@ def test_human_review_records_error_when_no_decision():
     s = MathModelingState(problem="p")
     delta = human_review_node(s)
     assert delta["errors"]
+
+
+def test_human_review_auto_approves_inside_node(monkeypatch):
+    monkeypatch.setenv("MATH_AGENT_AUTO_APPROVE_HUMAN_REVIEW", "1")
+    delta = human_review_node(MathModelingState(problem="p"))
+    assert delta["human_decision"].approved is True
+    assert "--no-interrupt" in delta["human_decision"].notes
