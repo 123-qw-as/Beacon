@@ -22,9 +22,6 @@
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT License" />
 </p>
 
-> 当前实现、已知限制与真题验收结论请先看 [`docs/README.md`](docs/README.md)。
-> 其中解释了旧 PDF 为什么只有 8 页，以及最新 completed 真题运行、9 页 PDF 和故障恢复证据。
-
 ---
 
 ## What is Beacon?
