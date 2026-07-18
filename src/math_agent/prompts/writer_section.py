@@ -164,6 +164,10 @@ _MAX_WRITER_EQUATIONS = 36
 _MAX_WRITER_VARIABLES = 20
 _MAX_WRITER_DERIVATIONS = 6
 _MAX_WRITER_CODE_ARTIFACTS = 3
+_DEPTH_EVIDENCE_LABELS = (
+    "BREAKDOWN", "DATA_PROFILE", "DYNAMIC_STRESS", "ALGORITHM_SEARCH",
+    "ROBUSTNESS", "SERVICE_DIAGNOSTICS", "DYNAMIC_EVENTS",
+)
 
 
 def _compact_text(text: str, max_chars: int) -> str:
@@ -201,6 +205,20 @@ def _compact_model_versions(state: MathModelingState):
     return compact
 
 
+def _depth_evidence_lines(artifact) -> list[str]:
+    """只为已验证绿色物流主证据保留可机读的扩展实验行。"""
+    if (
+        artifact.evidence_role != "primary"
+        or "BEACON_GREEN_LOGISTICS_SAFE_SOLVER" not in (artifact.code or "")
+    ):
+        return []
+    labels = "|".join(_re.escape(label) for label in _DEPTH_EVIDENCE_LABELS)
+    return [
+        match.group(0).strip()
+        for match in _re.finditer(rf"(?m)^(?:{labels}):\s+.+$", artifact.stdout or "")
+    ]
+
+
 def _compact_code_artifacts(state: MathModelingState):
     compact = []
     upper_bound = infer_entity_upper_bound(state.data_files)
@@ -216,11 +234,12 @@ def _compact_code_artifacts(state: MathModelingState):
         )
         if not result_lines:
             continue
+        evidence_lines = result_lines + _depth_evidence_lines(a)
         code_limit = 14000 if a.evidence_role == "primary" else 1000
         compact.append(a.model_copy(update={
             "purpose": _compact_text(a.purpose, 120),
             "code": _compact_text(a.code, code_limit),
-            "stdout": _compact_text("\n".join(result_lines), 800),
+            "stdout": _compact_text("\n".join(evidence_lines), 4000),
             "stderr": "",
             "artifact_paths": a.artifact_paths[:3],
         }))
@@ -247,6 +266,8 @@ def _extract_available_numbers(state: MathModelingState) -> str:
             expected_identifier=expected,
             max_entity_count=upper_bound,
         ):
+            lines.append(f"  [{a.purpose}] {line}")
+        for line in _depth_evidence_lines(a):
             lines.append(f"  [{a.purpose}] {line}")
     for r in state.sensitivity_runs:
         lines.append(f"  [sensitivity] {r.parameter}={r.values} → {r.metric}={r.results}")

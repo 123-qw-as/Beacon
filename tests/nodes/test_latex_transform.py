@@ -238,7 +238,7 @@ def test_md_table_to_latex():
 
 下文。"""
     out = _md_table_to_latex(s)
-    assert r"\begin{tabularx}{\linewidth}{XXX}" in out
+    assert r"\noindent\begin{tabularx}{\linewidth}{XXX}" in out
     assert r"\toprule" in out
     assert r"\midrule" in out
     assert r"\bottomrule" in out

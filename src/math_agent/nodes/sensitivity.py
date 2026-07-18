@@ -352,6 +352,16 @@ def perturb(source, parameter, value):
 
 def solve_case(parameter, value, index):
     source = perturb(BASE_SOURCE, parameter, value)
+    # 扫参只读取主 RESULT；随机交通和五类事件已由主证据独立完成，避免每个参数点
+    # 重复 200 个蒙特卡洛情景而稀释 15 次独立主模型重跑的计算预算。
+    source = re.sub(
+        r"(?m)^MONTE_CARLO_SCENARIOS\\s*=.*$", "MONTE_CARLO_SCENARIOS = 1", source
+    )
+    source = re.sub(
+        r"(?m)^event_scenarios_per_type\\s*=.*$",
+        "event_scenarios_per_type = min(1, max(1, len(event_candidates)))",
+        source,
+    )
     path = Path(f"_case_{{index}}.py")
     path.write_text(source, encoding="utf-8")
     completed = subprocess.run(

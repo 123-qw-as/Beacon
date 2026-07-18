@@ -431,7 +431,7 @@ def _md_table_to_latex(s: str) -> str:
                 else:
                     col_spec = "X" * ncols
                 col_spec = (col_spec + "X" * ncols)[:ncols]
-                tbl = [r"\begin{tabularx}{\linewidth}{" + col_spec + r"}",
+                tbl = [r"\noindent\begin{tabularx}{\linewidth}{" + col_spec + r"}",
                        r"\toprule",
                        " & ".join(header_cells) + r" \\",
                        r"\midrule"]

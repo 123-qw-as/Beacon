@@ -79,7 +79,7 @@ PaperCritic 评分：{{ prior_critic.score }}/10，approved={{ prior_critic.appr
 {% for a in code_artifacts %}
 ### [{{ loop.index }}] {{ a.purpose }} — success={{ a.success }}
 ```
-{{ a.stdout[-500:] }}
+{{ a.stdout[-3000:] }}
 ```
 {% if a.stderr and not a.success %}**stderr**：`{{ a.stderr[-300:] }}`{% endif %}
 {% endfor %}

@@ -67,9 +67,9 @@ def writer_node(state: MathModelingState) -> dict:
                 assumptions="数据、拆分、有限车队与政策假设",
                 notation="决策变量、参数和单位",
                 model_section="目标、容量、速度、能耗与限行约束",
-                solution="主方案、Q1场景、两类Q2基线和动态重插",
-                sensitivity="三组中心点对齐的单因素扫描",
-                conclusion="结论、局限与可扩展方向",
+                solution="主方案、2-opt改进、Q1/Q2基线、随机交通、服务诊断与五类动态事件",
+                sensitivity="三组中心点对齐的单因素扫描与蒙特卡洛尾部风险",
+                conclusion="分问题结论、动态回退阈值、随机风险、局限与可扩展方向",
                 references="题面文献和方法来源",
             )
         else:
@@ -392,6 +392,8 @@ def _verified_abstract_problem(state: MathModelingState):
     q1 = metrics.get("no_schedule", {})
     profile = _verified_structured_map(state, "DATA_PROFILE")
     stress = _verified_structured_map(state, "DYNAMIC_STRESS")
+    robust = _verified_structured_map(state, "ROBUSTNESS")
+    events = _verified_structured_map(state, "DYNAMIC_EVENTS")
     delta = ours.get("total_cost", 0.0) - q1.get("total_cost", 0.0)
     direction = "增加" if delta >= 0 else "减少"
     customer_count = profile.get("active_customers", profile.get("customers", 98.0))
@@ -401,6 +403,13 @@ def _verified_abstract_problem(state: MathModelingState):
         f"成功重插 {stress.get('success', 0):.0f} 个，成功率为 "
         f"{100.0 * stress.get('success_rate', 0.0):.2f}% 。"
         if stress else "并用容量可行局部重插验证动态响应。"
+    )
+    robustness_summary = (
+        f"固定路线进一步在题面速度分布下完成 {robust.get('scenarios', 0):.0f} 个蒙特卡洛情景，"
+        f"时间窗满足率均值为 {robust.get('timewin_mean', 0.0):.4f}、5% 分位为 "
+        f"{robust.get('timewin_p05', 0.0):.4f}；五类动态事件共执行 "
+        f"{events.get('scenarios', 0):.0f} 个独立情景。"
+        if robust and events else ""
     )
     return schema(
         abstract=(
@@ -414,7 +423,7 @@ def _verified_abstract_problem(state: MathModelingState):
             f"碳排放为 {ours.get('total_carbon', 0.0):.2f} kg。与仅关闭限行、其余口径相同的 Q1 场景相比，"
             f"成本{direction} {abs(delta):.2f} 元；该结果反映当前启发式在限行约束下更多使用低能耗新能源车，"
             "不构成政策必然降低成本或全局最优的结论。另以定速预测和 first-fit 最近邻为基线，"
-            "以三个单因素扫描检验局部敏感性。" + stress_summary
+            "以三个单因素扫描检验局部敏感性。" + stress_summary + robustness_summary
         ),
         problem_restatement=(
             "## 问题背景与研究意义\n\n"
@@ -440,11 +449,10 @@ def _verified_abstract_problem(state: MathModelingState):
             "二是等待会通过时间递推改变后续客户的晚到惩罚；三是油车与新能源车在容量、数量、能耗和"
             "排放系数上的差异会重塑车队结构。因此，需要把圆域相交判定、政策时段和车型属性嵌入每次"
             "候选插入的可行性检查，而不能在路线生成结束后再用一个统一系数修正总成本。\n\n"
-            "问题 3 要求面对取消、新增、地址或时间窗变化给出实时调整思路。受现有程序证据边界限制，"
-            "本文只对“一个受影响任务被移出后，在其他路线中寻找容量可行且距离增量最小的位置”进行"
-            "数值验证。其输入是已经形成的静态路线和变更任务，输出是是否成功重插、响应时间、距离"
-            "变化绝对值和改善标志。新增订单、批量取消、地址改变及多个时间窗同时变化被保留为策略"
-            "扩展，不把尚未执行的事件写成已经得到的实验结论。\n\n"
+            "问题 3 要求面对取消、新增、地址或时间窗变化给出实时调整思路。本文先以单任务跨路线"
+            "重插验证公共局部算子，再分别构造订单取消、新增订单、地址变更、时间窗收紧和车辆故障"
+            "五类独立压力情景。地址变更只采用附件中已有客户节点作为替代位置，车辆故障需要累计"
+            "迁移整条路线任务；未能局部恢复的情景明确计入回退率，不把失败样本从统计中删除。\n\n"
             "## 关键难点分析\n\n"
             "第一，部分客户聚合需求超过小车型容量，若坚持整客户不可拆分，构造算法会出现剩余任务"
             "无法装入任何车辆的无进展状态。本文采用分割配送，把超容量需求拆为单车可承载的访问任务，"
@@ -521,11 +529,11 @@ def _verified_assumptions_notation(state: MathModelingState):
             "**依据**：该值由题面统一给定，并在到达—等待—服务—离开的时间递推中显式使用。\n"
             "**合理性与影响**：固定服务时长便于比较不同策略；若服务时长随货量变化，可改为"
             "基础时长与装卸量的分段函数，并把相应参数纳入敏感性分析。\n\n"
-            "**假设5：题面分时段正态车速以期望值作为确定性计划速度。**\n"
-            "**依据**：本次正式求解器没有进行随机抽样，而是用顺畅、一般和拥堵时段的期望速度，"
-            "长弧跨时段时按边界逐段积分。\n"
-            "**合理性与影响**：该处理适合形成可复算基准，但不能代表随机拥堵尾部风险；推广时应"
-            "使用情景模拟、机会约束或分布鲁棒模型。\n\n"
+            "**假设5：确定性排线使用分时段期望速度，随机速度用于方案外部评价。**\n"
+            "**依据**：主求解器用顺畅、一般和拥堵时段的期望速度构造路线，长弧跨时段时按边界"
+            "逐段积分；排线完成后再按题面正态分布执行固定种子的蒙特卡洛重算。\n"
+            "**合理性与影响**：这种职责隔离能够复算随机交通下的尾部服务风险，但没有让情景风险"
+            "反向影响路线决策，因此不能替代机会约束或分布鲁棒优化。\n\n"
             "**假设6：五类车的载重、容积、数量和固定启用成本在计划期内不变。**\n"
             "**依据**：这些参数由题面给定，程序把每种车型的可用数量作为硬上限，一辆物理车在"
             "本日计划中至多启用一次。\n"
@@ -612,6 +620,10 @@ def _verified_solution(state: MathModelingState):
     ours = metrics.get("ours", {})
     profile = _verified_structured_map(state, "DATA_PROFILE")
     stress = _verified_structured_map(state, "DYNAMIC_STRESS")
+    search = _verified_structured_map(state, "ALGORITHM_SEARCH")
+    robust = _verified_structured_map(state, "ROBUSTNESS")
+    diagnostics = _verified_structured_map(state, "SERVICE_DIAGNOSTICS")
+    events = _verified_structured_map(state, "DYNAMIC_EVENTS")
     primary = next((
         artifact for artifact in reversed(state.latest_code_artifacts())
         if artifact.success and artifact.evidence_role == "primary"
@@ -697,6 +709,56 @@ def _verified_solution(state: MathModelingState):
             "时，失败意味着在冻结边界下没有可行跨路线位置，应触发扩大邻域或全局重优化，而不能"
             "强行把任务塞入超载路线。响应时间来自实际枚举，但会受运行环境影响，只作为本机量级证据。"
         )
+    search_section = ""
+    if search:
+        search_section = (
+            "\n\n## 构造解后的 2-opt 局部改进\n\n"
+            f"主方案在构造完成后逐路线执行至多两轮 2-opt，共接受 {search.get('moves', 0):.0f} 次"
+            f"严格改善邻域。距离—晚到联合评分从 {search.get('initial_score', 0):.4f} 降至 "
+            f"{search.get('final_score', 0):.4f}，下降 {100.0 * search.get('improvement_rate', 0):.2f}% ，"
+            f"局部搜索耗时 {search.get('runtime_ms', 0):.4f} ms。每个候选反转后均重新递推分时速度、"
+            "时间窗和绿色区政策，不以静态欧氏距离替代正式可行性检查。该结果量化了局部搜索相对"
+            "纯构造解的边际贡献，但仍不提供全局最优性间隙。"
+        )
+    robustness_section = ""
+    if robust:
+        robustness_section = (
+            "\n\n## 随机交通蒙特卡洛稳健性\n\n"
+            f"使用固定随机种子 {robust.get('seed', 0):.0f}，按题面三个时段的正态速度分布生成 "
+            f"{robust.get('scenarios', 0):.0f} 个独立情景，并在不改变既定路线的条件下重算到达和晚到。"
+            f"时间窗满足率均值为 {robust.get('timewin_mean', 0):.4f}，标准差为 "
+            f"{robust.get('timewin_std', 0):.4f}，5% 分位为 {robust.get('timewin_p05', 0):.4f}；"
+            f"情景成本均值和 P95 分别为 {robust.get('cost_mean', 0):.2f} 元和 "
+            f"{robust.get('cost_p95', 0):.2f} 元。该实验是固定决策的样本外压力测试，说明当前路线"
+            "对交通波动的尾部暴露，不把它表述为机会约束已经优化。"
+        )
+    diagnostic_section = ""
+    if diagnostics:
+        diagnostic_section = (
+            "\n\n## 客户与线路诊断\n\n"
+            f"确定性主方案共有 {diagnostics.get('late_tasks', 0):.0f} 个访问任务晚到，平均、P95 与最大"
+            f"晚到分别为 {diagnostics.get('mean_late_min', 0):.2f}、"
+            f"{diagnostics.get('p95_late_min', 0):.2f} 和 {diagnostics.get('max_late_min', 0):.2f} 分钟。"
+            f"路线平均载重利用率为 {100.0 * diagnostics.get('mean_weight_util', 0):.2f}% ，平均容积"
+            f"利用率为 {100.0 * diagnostics.get('mean_volume_util', 0):.2f}% ，空载返程里程占比为 "
+            f"{100.0 * diagnostics.get('empty_return_ratio', 0):.2f}% 。这些指标把总体时间窗率进一步"
+            "拆解为服务违约强度和车辆资源利用，可用于判断下一轮应优先调序、并线还是调整车型。"
+        )
+    event_section = ""
+    if events:
+        event_section = (
+            "\n\n## 五类动态事件实验\n\n"
+            "| 事件类型 | 局部恢复成功率 |\n|---|---:|\n"
+            f"| 订单取消 | {100.0 * events.get('cancellation_success_rate', 0):.2f}% |\n"
+            f"| 新增订单 | {100.0 * events.get('new_order_success_rate', 0):.2f}% |\n"
+            f"| 地址变更 | {100.0 * events.get('address_change_success_rate', 0):.2f}% |\n"
+            f"| 时间窗收紧 | {100.0 * events.get('time_window_success_rate', 0):.2f}% |\n"
+            f"| 车辆故障 | {100.0 * events.get('vehicle_failure_success_rate', 0):.2f}% |\n\n"
+            f"五类事件共运行 {events.get('scenarios', 0):.0f} 个独立情景，局部策略失败并需要升级回退的"
+            f"比例为 {100.0 * events.get('fallback_rate', 0):.2f}% 。地址变更使用附件中的另一个真实"
+            "客户节点作为压力位置，时间窗情景将窗口末端收紧 60 分钟，车辆故障则累计迁移整条路线"
+            "的任务。该口径避免把单任务重插成功率冒充为所有事件均已验证。"
+        )
     return schema(solution=(
         "程序依次完成附件字段规范化、客户需求聚合、最小车型容量拆分、分车型候选路线构造、"
         "有限车队选择、逐路线约束断言和 RESULT 校验。每轮必须减少未分配任务数；耗尽车队或"
@@ -709,13 +771,14 @@ def _verified_solution(state: MathModelingState):
         "而不是从主方案 stdout 改标签。主方案服务率为 "
         f"{ours.get('service_rate', 0):.4f}，道路里程 {ours.get('total_distance', 0):.2f} km，"
         f"平均配送历时 {ours.get('avg_delivery_time', 0):.2f} 分钟。\n\n"
-        + profile_section + breakdown_section + comparison_section + stress_section + "\n\n"
+        + profile_section + breakdown_section + comparison_section + search_section
+        + robustness_section + diagnostic_section + stress_section + event_section + "\n\n"
         "动态主 RESULT 保留首个受影响任务的兼容字段，并枚举其他路线的容量可行插入位置。"
         f"本次重插标志为 {ours.get('dynamic_reinserted', 0):.0f}，响应时间 "
         f"{ours.get('response_time', 0):.6f} s，距离变化绝对值 "
         f"{ours.get('dynamic_distance_change', 0):.4f} km；改善标志为 "
-        f"{ours.get('dynamic_distance_improved', 0):.0f}。该实验只证明单事件局部响应可执行，"
-        "批量取消、新增、地址变更和时间窗联动仍需按事件类型另行压力测试。\n\n"
+        f"{ours.get('dynamic_distance_improved', 0):.0f}。该兼容字段描述首个单任务样本；"
+        "五类事件的总体表现以上述独立事件矩阵为准。\n\n"
         "## 求解算法与执行流程\n\n"
         "本文采用容量拆分与逐步最小增量构造启发式。第一步读取并规范化四个附件，检查订单客户、"
         "时间窗客户、坐标客户与距离矩阵索引能否对应；第二步按客户聚合订单重量和体积，并把超过"
@@ -723,7 +786,7 @@ def _verified_solution(state: MathModelingState):
         "和空路线集合；第四步对每一种仍有库存的车型尝试构造候选路线，逐个评估尚未服务任务的"
         "容量、时间和绿色区政策可行性；第五步用固定成本、里程代理和晚到代价形成单位配送重量"
         "增量，选择当前最合适的车型与路线；第六步提交路线并从未分配集合删除已覆盖任务；第七步"
-        "在全部任务完成后重新计算里程、时序、能耗、排放和五项成本，最后执行覆盖、容量、车队和"
+        "对构造路线执行可行性保持的 2-opt；第七步在全部任务完成后重新计算里程、时序、能耗、排放和五项成本，最后执行覆盖、容量、车队和"
         "RESULT 合理性校验。\n\n"
         "候选路线内部采用最近可行增量思想：对当前位置和每个未分配任务，先判断加入任务后的累计"
         "重量与体积是否越界，再用分段速度函数递推到达和开始服务时刻；燃油车还要检查客户点与"
@@ -809,8 +872,9 @@ def _verified_solution(state: MathModelingState):
         "## 问题三动态调整分析\n\n"
         "动态实验从已提交路线中移出一个受影响任务，枚举其他路线的可行插入位置并选择最小距离"
         "增量。重插前后都执行容量与路线结构检查，响应时间由实际 Python 计时差得到，单位为秒。"
-        "距离变化记录绝对值并另设改善标志，避免用符号方向不清的单一字段造成误读。该结果说明"
-        "局部处置链路可运行，但不能覆盖新增订单、地址修改、时间窗变化和多个事件同时发生的情形。\n\n"
+        "距离变化记录绝对值并另设改善标志，避免用符号方向不清的单一字段造成误读。在此公共算子"
+        "之外，程序还对五类事件分别统计局部成功率；事件矩阵覆盖独立单事件，不代表连续多事件的"
+        "滚动长期表现。\n\n"
         "实际部署可采用分层响应：单个取消或轻微变化先局部修复，若连续事件使累计距离或晚到成本"
         "超过阈值，则触发全局邻域搜索；若车型库存、政策或需求规模发生结构性变化，则从最新数据"
         "重新运行完整模型。这样既保留局部算法的速度优势，也限制多次局部决策累积的次优风险。\n\n"
@@ -822,11 +886,10 @@ def _verified_solution(state: MathModelingState):
         "| 地址变更 | 客户坐标及相关道路距离改变 | 可复用候选插入框架 | 必须先更新距离矩阵，不能只改绘图坐标 |\n"
         "| 时间窗变更 | 服务区间收紧、平移或放宽 | 可在候选评估中重算等待与晚到 | 硬窗口无可行位置时升级重优化 |\n"
         "| 车辆故障 | 一条路线及其车辆暂时失效 | 可逐项释放该路线任务 | 多任务联动需扩大邻域并重配车型 |\n\n"
-        "表中的前两列描述状态变化，后两列区分已实现的局部算子和仍需升级的系统动作。当前压力测试"
-        "并未分别生成五类业务事件，而是用 30 个不同来源任务检验共同的跨路线插入内核。因此，"
-        "论文可以据实评价插入内核的覆盖率与响应时间，却不能把结果写成五类事件均已验证。这个"
-        "区分比罗列事件名称更重要：地址变化必须先得到新的道路距离，车辆故障会同时释放一组任务，"
-        "两者都改变了局部搜索的输入规模，不能用一次任务搬移的成功标志替代。\n\n"
+        "表中的前两列描述状态变化，后两列区分局部算子和升级动作。五类事件实验均从同一静态方案"
+        "独立开始，其中地址变化用附件已有节点替代位置，车辆故障释放整条路线任务。它们能够比较"
+        "不同事件对局部邻域的压力，却仍未覆盖连续到达、实时道路矩阵更新和多事件联动；因此，"
+        "总体回退率必须与各类型成功率同时报告。\n\n"
         "## 动态发布与回退规则\n\n"
         "一次局部方案只有同时满足四个条件才可发布：受影响任务重新获得唯一归属；目标车辆的载重"
         "和容积不越界；燃油车在限行窗口不进入或穿越绿色区；重新递推后不存在未计入的时序成本。"
@@ -846,7 +909,7 @@ def _verified_model_section() -> str:
 \[
 \min Z=400\sum_k y_k+\frac{20}{60}\sum_iw_i+\frac{50}{60}\sum_il_i+Z_{\rm energy}+0.65E_{\rm carbon}.
 \]
-燃油车在速度 $v$ 下的百公里油耗为 $0.0025v^2-0.2554v+31.75$，新能源车百公里电耗为 $0.001v^2-0.1v+36.194$；行驶弧上的满载修正分别为 $1+0.40r$ 和 $1+0.35r$，其中 $r$ 是该弧起点的载重率。油、电单价分别为 7.61 元/L 和 1.64 元/kWh，排放换算系数分别为 2.547 kg/L 和 0.501 kg/kWh。
+燃油车在速度 $v$ 下的百公里油耗为 $0.0025v^2-0.2554v+31.75$，新能源车百公里电耗为 $0.0014v^2-0.12v+36.19$；行驶弧上的满载修正分别为 $1+0.40r$ 和 $1+0.35r$，其中 $r$ 是该弧起点的载重率。油、电单价分别为 7.61 元/L 和 1.64 元/kWh，排放换算系数分别为 2.547 kg/L 和 0.501 kg/kWh。
 
 任务覆盖、流守恒、车型和有限车队约束为
 \[
@@ -874,9 +937,9 @@ s_i=\max(t_i,E_i),\quad t_j=s_i+20+\tau(d_{ij},s_i+20),
 
 ## 求解器和动态事件职责
 
-实际主求解器是可复算的成本感知构造启发式：对仍有余额的每种车型分别构造容量和政策可行路线，以单位配送重量的固定成本、里程代理和晚到惩罚选择下一辆车。它返回可行上界，不提供全局最优性或最优间隙。Q1 对照仅关闭限行，Q2 主方案启用限行；另设定速预测和 first-fit 最近邻两种独立基线，四者均重新读取同一附件。
+实际主求解器先执行可复算的成本感知构造启发式：对仍有余额的每种车型分别构造容量和政策可行路线，以单位配送重量的固定成本、里程代理和晚到惩罚选择下一辆车；随后逐路线执行至多两轮 2-opt，每个候选反转均完整重算时变速度、时间窗和绿色区可行性。它返回改进后的可行上界，不提供全局最优性间隙。Q1 对照仅关闭限行，Q2 主方案启用限行；另设定速预测和关闭 2-opt 的 first-fit 最近邻两种独立基线，四者均重新读取同一附件。
 
-Q3 数值实验将一个受影响任务移出原路线，枚举其他车辆的容量可行插入位置，以道路距离增量最小者重插；输出响应时间、距离变化绝对值及其是否改善。该实验验证局部事件响应，不冒充对所有新增订单、地址变更和批量事件的全面鲁棒性证明。
+Q3 的局部事件响应先将一个受影响任务移出原路线，枚举各车辆的容量可行插入位置，以道路距离与新增晚到联合增量最小者重插；再分别构造订单取消、新增订单、地址替换、时间窗收紧和车辆故障情景。每类情景独立从静态主方案开始，输出类型成功率和总体回退率；该实验验证五类单事件压力，不冒充连续多事件滚动系统的长期最优性证明。
 
 ## 数据组织与分割配送映射
 
@@ -972,7 +1035,7 @@ T_{0.95}=\operatorname{Quantile}_{0.95}(T_1,\ldots,T_S),
 
 路线增长过程维护当前载重、体积、时刻、位置和剩余任务集合。每加入一个任务，先更新载重和容积，再递推到达与服务时刻，随后判断绿色区条件并估计新增成本；若候选不满足硬约束，状态不提交。路线结束后返回配送中心并重新计算完整成本，防止增量代理与正式核算之间出现漂移。下一条路线从更新后的车型库存和未服务任务重新开始。
 
-构造式方法存在顺序依赖：早期选择会改变后续可用任务和车型，因此本文设置两个独立基线观察候选规则与速度口径的影响。进一步改进可以在构造解上执行交换、搬移、2-opt 或跨路线重插，但必须在每次邻域动作后重算时变旅行时间和绿色区可行性。本文未执行这些全局邻域，所以不把它们写入已实现算法，只作为提高当前可行上界的明确方向。
+构造式方法存在顺序依赖：早期选择会改变后续可用任务和车型，因此本文设置两个独立基线观察候选规则与速度口径的影响。当前已经执行路线内 2-opt，并以评分下降率记录其贡献；进一步的交换、跨路线搬移、多任务邻域和精确小实例对照仍需在每次动作后重算时变旅行时间与绿色区可行性。未执行的全局邻域不写入算法名称，只作为继续收紧可行上界的方向。
 
 ## 验证层次
 
@@ -982,6 +1045,8 @@ T_{0.95}=\operatorname{Quantile}_{0.95}(T_1,\ldots,T_S),
 def _verified_sensitivity_section(state: MathModelingState) -> str:
     """只用 checkpoint 中已对齐的扫描点生成敏感性章节。"""
     runs = {run.parameter: run for run in state.sensitivity_runs}
+    robust = _verified_structured_map(state, "ROBUSTNESS")
+    diagnostics = _verified_structured_map(state, "SERVICE_DIAGNOSTICS")
     blocks = [
         "## 检验目的与实验原则\n\n"
         "本节采用确定性单因素扫描：每次只替换一个源代码常数并重新执行同一正式主求解器，"
@@ -1040,8 +1105,9 @@ def _verified_sensitivity_section(state: MathModelingState) -> str:
         values_text = "[" + ", ".join(f"{float(v):.6g}" for v in run.values) + "]"
         results_text = "[" + ", ".join(f"{float(v):.2f}" for v in run.results) + "]"
         blocks.append(
-            f"**{parameter}**：{definition}{figure} 给出的参数点为 `{values_text}`，"
-            f"对应总成本原始结果为 `{results_text}`；极差为 "
+            f"**{parameter}**：{definition}{figure} 给出的参数点如下：\n\n"
+            f"`{values_text}`\n\n对应总成本原始结果如下：\n\n"
+            f"`{results_text}`\n\n极差为 "
             f"{max(run.results) - min(run.results):.2f} 元。该描述直接由扫描数组计算，"
             "不作样本外统计或因果外推。中心点承担复现实验，低值与高值分别检验同一求解器在"
             "参数两侧的响应。解释时先比较方向，再比较绝对跨度，最后核对是否可能由车型离散切换"
@@ -1053,6 +1119,17 @@ def _verified_sensitivity_section(state: MathModelingState) -> str:
             available,
             key=lambda run: max(run.results) - min(run.results),
             reverse=True,
+        )
+    if robust:
+        blocks.append(
+            "## 随机交通样本外稳健性\n\n"
+            f"单因素扫描改变参数并重新决策，蒙特卡洛实验则固定正式路线，仅从题面正态速度分布抽取 "
+            f"{robust.get('scenarios', 0):.0f} 个交通情景重算服务表现。时间窗满足率均值为 "
+            f"{robust.get('timewin_mean', 0):.4f}、标准差为 {robust.get('timewin_std', 0):.4f}、"
+            f"5% 分位为 {robust.get('timewin_p05', 0):.4f}；情景总成本均值为 "
+            f"{robust.get('cost_mean', 0):.2f} 元、P95 为 {robust.get('cost_p95', 0):.2f} 元。"
+            f"确定性主方案最大晚到为 {diagnostics.get('max_late_min', 0):.2f} 分钟。前者刻画交通"
+            "随机性引起的尾部风险，后者说明基准计划本身的服务违约强度，二者不能互相替代。"
         )
         blocks.append(
             "## 敏感度排序与鲁棒性判断\n\n"
@@ -1091,8 +1168,8 @@ def _verified_sensitivity_section(state: MathModelingState) -> str:
         "的影响依赖另一个参数。对于离散车型切换，应同时标出车队结构变化，避免把跳变误判为平滑"
         "弹性。该扩展尚未执行，因此这里只给出实验设计，不报告虚构网格数值。",
         "## 误差来源与证据边界\n\n"
-        "本次扫描仍有四类误差边界。第一，车速采用题面分布的期望值，未传播随机拥堵方差，因而"
-        "没有置信区间。第二，构造启发式含离散车型选择，参数轻微变化可能触发路线或车型跳变，"
+        "本次分析仍有四类误差边界。第一，蒙特卡洛只评价固定路线，尚未把随机速度嵌入决策或给出"
+        "机会约束可行性。第二，构造启发式含离散车型选择，参数轻微变化可能触发路线或车型跳变，"
         "有限扫描点仍难以区分平滑趋势与离散阈值。第三，单因素设计固定其他参数，不能识别速度与限行"
         "时段、晚到惩罚与车型选择之间的交互。第四，总成本是聚合指标，无法单独解释客户层面的"
         "晚到分布。以上限制要求把结果称为确定性局部敏感性，而不是统计显著性或全局鲁棒性证明。",
@@ -1100,8 +1177,8 @@ def _verified_sensitivity_section(state: MathModelingState) -> str:
         "运营上应把高敏感参数纳入数据质量和预警看板：速度比例可由实时路况滚动校准，政策窗口"
         "应在排班前确认，晚到惩罚则需与服务等级协议保持一致。若参数越过当前扫描范围，不应直接"
         "套用图中趋势，而应重新运行主求解器。模型改进可增加更密集的扫描点，并对两个最敏感参数"
-        "执行二维网格实验，绘制等高线观察交互；还可对速度进行情景抽样，报告成本、服务率和"
-        "碳排放的分布。所有新增实验仍须满足中心点对齐、附件读取和结构化 RESULT 门禁。",
+        "执行二维网格实验，绘制等高线观察交互；还可把当前交通情景评价升级为机会约束或情景优化。"
+        "所有新增实验仍须满足中心点对齐、附件读取和结构化 RESULT 门禁。",
     ])
     return "\n\n".join(blocks)
 
@@ -1216,6 +1293,9 @@ def _verified_conclusion_section(state: MathModelingState) -> str:
         baseline_assessment = "这些基线均未降低主方案成本，但只能说明本次对照结果，不能证明全局最优。"
     metrics = _verified_result_map(state)
     stress = _verified_structured_map(state, "DYNAMIC_STRESS")
+    robust = _verified_structured_map(state, "ROBUSTNESS")
+    diagnostics = _verified_structured_map(state, "SERVICE_DIAGNOSTICS")
+    events = _verified_structured_map(state, "DYNAMIC_EVENTS")
     ours = metrics.get("ours", {})
     q1 = metrics.get("no_schedule", {})
     q1_delta = ours.get("total_cost", 0.0) - q1.get("total_cost", 0.0)
@@ -1232,6 +1312,18 @@ def _verified_conclusion_section(state: MathModelingState) -> str:
         f"{stress.get('p95_response_ms', 0):.4f} ms。"
         if stress else "当前只完成一次局部重插验证。"
     )
+    event_conclusion = (
+        f"五类事件共执行 {events.get('scenarios', 0):.0f} 个独立情景，其中新增订单与车辆故障的"
+        f"局部恢复成功率分别为 {100.0 * events.get('new_order_success_rate', 0):.2f}% 和 "
+        f"{100.0 * events.get('vehicle_failure_success_rate', 0):.2f}% ，总体回退率为 "
+        f"{100.0 * events.get('fallback_rate', 0):.2f}% 。"
+        if events else ""
+    )
+    robustness_conclusion = (
+        f"随机交通的 {robust.get('scenarios', 0):.0f} 个蒙特卡洛情景中，时间窗满足率 5% 分位为 "
+        f"{robust.get('timewin_p05', 0):.4f}，情景成本 P95 为 {robust.get('cost_p95', 0):.2f} 元。"
+        if robust else ""
+    )
     return "\n\n".join([
         "## 各问题主要结论\n\n"
         "**问题一与问题二。**本次正式主方案成本为 "
@@ -1244,9 +1336,9 @@ def _verified_conclusion_section(state: MathModelingState) -> str:
         "两个场景共享预处理、费用和算法，差值具有同口径可比性；但启发式没有最优性间隙，因此只说明"
         "本次可行构造解在政策开关前后的表现。\n\n"
         "**问题三。**Q3验证了受影响任务移出后的容量可行局部重插，并把响应时间、距离变化绝对值和改善标志写入同一 RESULT。"
-        + stress_conclusion +
-        "局部搜索能够在不重建全部路线的情况下给出可执行调整，适合作为单事件快速响应；它没有覆盖"
-        "批量变化和全局车型重配，因此不把一次重插改善外推为动态系统长期最优。",
+        + stress_conclusion + event_conclusion +
+        "局部搜索能够在不重建全部路线的情况下给出可执行调整；车辆故障等低成功率事件则应触发"
+        "备用车辆或全局重优化，不把局部恢复结果外推为动态系统长期最优。",
         "## 基线比较与结果可信度\n\n"
         "同口径有效基线为：" + baseline_summary + "。" + baseline_assessment +
         "每个基线都重新读取订单、距离、时间窗和坐标附件，执行独立脚本并通过相同 RESULT 门禁。"
@@ -1261,14 +1353,15 @@ def _verified_conclusion_section(state: MathModelingState) -> str:
         "分离，便于判断结论来自模型机制还是执行差异。第五，checkpoint 和分节写作使长流程失败后"
         "可以从最近完成节点恢复，而不必重跑全部计算。",
         "## 稳健性、误差与局限性\n\n"
-        "单因素扫描的三个中心点均复现正式主成本，但它只反映局部、确定性的参数响应。"
-        "当前速度采用题面正态分布的期望值并在时段边界分段积分，未采样随机拥堵；动态策略对每个样本只作单任务局部重插，没有周期性全局重优化；"
-        f"敏感性分析未覆盖参数交互；时间窗满足率为 {ours.get('timewin_rate', 0.0):.4f}，仍有任务未满足，现有汇总输出不足以对这些"
-        "任务的空间分布、窗口宽度或需求规模作客户级归因。构造启发式给出可行上界，没有分支定界"
+        "单因素扫描的三个中心点均复现正式主成本；" + robustness_conclusion +
+        "蒙特卡洛评估固定了主路线，因此揭示的是交通扰动风险，而不是随机规划后的最优策略。"
+        f"敏感性分析仍未覆盖参数交互；确定性主方案有 {diagnostics.get('late_tasks', 0):.0f} 个晚到任务，"
+        f"最大晚到 {diagnostics.get('max_late_min', 0):.2f} 分钟。现有诊断已量化违约强度和路线利用率，"
+        "但尚未按客户地理分区或服务等级聚类。构造加 2-opt 的启发式给出可行上界，没有分支定界"
         "或最优性间隙；分割配送还假设业务允许同一客户多次访问。以上均是结果解释的边界，而不是"
         "被隐藏的成功指标。",
         "## 推广与改进方向\n\n"
-        "首先可用实时交通样本建立随机速度场，并以机会约束或情景鲁棒优化替代确定性速度。其次可在"
+        "首先可在现有蒙特卡洛评估上进一步建立机会约束或情景鲁棒优化，使随机风险进入决策而不只进入评价。其次可在"
         "若干事件或固定滚动窗口后触发一次全局邻域搜索，控制局部插入的累积次优。再次应增加晚到惩罚与碳成本系数"
         "的二维扫描，绘制等高线识别交互效应。最后应输出未满足时间窗任务清单，并按空间位置、窗口宽度和需求量聚类，"
         "把诊断结果反馈给路线构造与服务承诺。若要用于不规则低排放区，可把圆域解析判定替换为"

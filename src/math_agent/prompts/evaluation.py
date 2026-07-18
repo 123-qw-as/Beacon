@@ -12,7 +12,10 @@ SYSTEM = (
 )
 
 
-def build_prompt(paper, figures, sensitivity_runs, paper_critic, table_warnings=None):
+def build_prompt(
+    paper, figures, sensitivity_runs, paper_critic, table_warnings=None,
+    *, depth_signals=None,
+):
     crit_summary = "（无 PaperCritic 报告）"
     if paper_critic:
         crit_summary = (
@@ -22,6 +25,13 @@ def build_prompt(paper, figures, sensitivity_runs, paper_critic, table_warnings=
     warn_summary = ""
     if table_warnings:
         warn_summary = f"\n# table_assembler 清洗记录\n{len(table_warnings)} 处禁用词被替换。\n\n"
+    depth_summary = ""
+    if depth_signals:
+        depth_summary = (
+            "# 已通过运行门禁的深度实验\n"
+            + "; ".join(f"{key}={bool(value)}" for key, value in depth_signals.items())
+            + "\n这些信号只证明相应实验已执行，仍需检查正文是否正确解释其边界。\n\n"
+        )
     return (
         f"# 论文摘要\n{paper.abstract[:1000]}\n\n"
         f"# 主体（截断）\n模型：{paper.model_section[:800]}\n\n"
@@ -31,6 +41,7 @@ def build_prompt(paper, figures, sensitivity_runs, paper_critic, table_warnings=
         f"{sum(f.quality_score for f in figures)/max(1,len(figures)):.1f}; "
         f"sensitivity 数={len(sensitivity_runs)}\n\n"
         f"{warn_summary}"
+        f"{depth_summary}"
         f"# PaperCritic 摘要\n{crit_summary}\n\n"
         f"请按 schema 输出 JSON。"
     )

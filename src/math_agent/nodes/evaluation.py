@@ -44,8 +44,22 @@ def evaluation_node(state: MathModelingState) -> dict:
         return {"errors": ["evaluation: 论文初稿为空，跳过评估"]}
 
     paper_critic = state.latest_critic("paper")
+    depth_labels = (
+        "ALGORITHM_SEARCH", "ROBUSTNESS", "SERVICE_DIAGNOSTICS", "DYNAMIC_EVENTS",
+    )
+    depth_signals = {
+        label: any(
+            artifact.success and artifact.evidence_role == "primary"
+            and f"{label}:" in (artifact.stdout or "")
+            for artifact in state.latest_code_artifacts()
+        )
+        for label in depth_labels
+    }
     out: EvaluationReport = complete(
-        build_prompt(p, state.figures, state.sensitivity_runs, paper_critic, state.table_warnings),
+        build_prompt(
+            p, state.figures, state.sensitivity_runs, paper_critic,
+            state.table_warnings, depth_signals=depth_signals,
+        ),
         schema=EvaluationReport, system=SYSTEM,
         model=MODEL_ROUTING["evaluation"],
     )

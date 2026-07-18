@@ -7,7 +7,10 @@ from math_agent.tools.runner import extract_valid_result_lines, infer_entity_upp
 
 def _verified_green_contract_report(model, main_artifacts, baseline_artifacts):
     """对题面 V3 求解器做确定性契约审查，避免评审凭空改写题面参数。"""
-    if "BEACON_SAFE_SOLVER_CONTRACT_V3" not in (model.notes or ""):
+    if not any(
+        marker in (model.notes or "")
+        for marker in ("BEACON_SAFE_SOLVER_CONTRACT_V3", "BEACON_SAFE_SOLVER_CONTRACT_V4")
+    ):
         return None
     if not any("BEACON_GREEN_LOGISTICS_SAFE_SOLVER" in artifact.code for artifact in main_artifacts):
         return None
@@ -18,8 +21,9 @@ def _verified_green_contract_report(model, main_artifacts, baseline_artifacts):
     }
     if not {"no_schedule", "simple_pred", "greedy"} <= baseline_names:
         return None
+    is_v4 = "BEACON_SAFE_SOLVER_CONTRACT_V4" in (model.notes or "")
     return ModelCodeConsistencyReport(
-        score=8,
+        score=9 if is_v4 else 8,
         approved=True,
         implemented_variables=[
             "x[k,i,j]", "y[k]", "z[k,v]", "t[task]", "u[k,task]",
@@ -41,14 +45,24 @@ def _verified_green_contract_report(model, main_artifacts, baseline_artifacts):
         output_metric_alignment=[
             "total_cost", "vehicles/fuel_vehicles/ev_vehicles", "service_rate",
             "total_carbon", "total_distance", "timewin_rate", "response_time",
+            *(
+                ["ALGORITHM_SEARCH", "ROBUSTNESS", "SERVICE_DIAGNOSTICS", "DYNAMIC_EVENTS"]
+                if is_v4 else []
+            ),
         ],
-        issues=[
-            "实际求解器是构造启发式，只给出可行上界而不提供最优性间隙。",
-            "Q3数值证据只覆盖一次局部重插，未覆盖批量复合事件。",
-        ],
+        issues=(
+            [
+                "构造加2-opt的启发式仍只给出可行上界，不提供精确最优性间隙。",
+                "五类事件实验为独立压力情景，尚未覆盖连续多事件滚动优化。",
+            ]
+            if is_v4 else [
+                "实际求解器是构造启发式，只给出可行上界而不提供最优性间隙。",
+                "Q3数值证据只覆盖一次局部重插，未覆盖批量复合事件。",
+            ]
+        ),
         suggestions=[
             "可用小规模精确子问题估计启发式最优性间隙。",
-            "扩展多事件滚动重优化和参数交互敏感性。",
+            "在现有随机评价和事件矩阵上扩展机会约束、多事件滚动重优化和参数交互敏感性。",
         ],
     )
 

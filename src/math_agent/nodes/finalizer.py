@@ -130,16 +130,23 @@ def _pdf_body_metrics(pdf_path: Path) -> tuple[int, int, int, int]:
     避免通过空白页、纯图片占位或把代码附录拉长来满足竞赛论文篇幅门禁。
     """
     texts = [(page.extract_text() or "") for page in PdfReader(str(pdf_path)).pages]
+    body_start = 0
+    for index, text in enumerate(texts):
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        if re.match(
+            r"^1\s*[.、]\s*(?:问题(?:重述|分析)|Problem(?:\s+Restatement)?)(?:\s|$)",
+            first_line,
+            re.I,
+        ):
+            body_start = index
+            break
     appendix_index = len(texts)
     for index, text in enumerate(texts):
-        compact = "".join(text.split())
-        if (
-            "关键算法代码" in compact
-            or re.search(r"(?mi)^\s*(?:附录|Appendix)\b", text)
-        ):
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        if re.match(r"^(?:附录(?:\s*[A-ZＡ-Ｚ一二三四五六七八九十])?|Appendix\b)", first_line, re.I):
             appendix_index = index
             break
-    body = texts[:appendix_index]
+    body = texts[body_start:appendix_index]
     nonempty_pages = sum(bool("".join(text.split())) for text in body)
     nonspace_chars = sum(len("".join(text.split())) for text in body)
     return len(texts), len(body), nonempty_pages, nonspace_chars
@@ -255,6 +262,10 @@ def _collect_quality_warnings(state: MathModelingState, out: Path) -> list[str]:
     upper_bound = infer_entity_upper_bound(state.data_files)
     valid_main = 0
     valid_baseline_categories: set[str] = set()
+    green_depth_labels = (
+        "ALGORITHM_SEARCH", "ROBUSTNESS", "SERVICE_DIAGNOSTICS", "DYNAMIC_EVENTS",
+    )
+    green_depth_missing: set[str] = set()
     for artifact in state.latest_code_artifacts():
         if not artifact.success:
             continue
@@ -272,10 +283,20 @@ def _collect_quality_warnings(state: MathModelingState, out: Path) -> list[str]:
             continue
         if artifact.category == "figure" and artifact.evidence_role == "primary":
             valid_main += 1
+            if "BEACON_GREEN_LOGISTICS_SAFE_SOLVER" in (artifact.code or ""):
+                green_depth_missing.update(
+                    label for label in green_depth_labels
+                    if f"{label}:" not in (artifact.stdout or "")
+                )
         elif artifact.category.startswith("baseline:") and artifact.evidence_role == "baseline":
             valid_baseline_categories.add(artifact.category)
     if valid_main == 0:
         warnings.append("质量门禁：缺少通过协议与合理性校验的主方案 RESULT")
+    if green_depth_missing:
+        warnings.append(
+            "质量门禁：城市物流主方案缺少深度实验："
+            + "、".join(sorted(green_depth_missing))
+        )
     if len(valid_baseline_categories) < 2:
         warnings.append(
             f"质量门禁：有效对照方案仅 {len(valid_baseline_categories)} 个，至少需要 2 个"
